@@ -1,15 +1,21 @@
 package main
 
 import (
-	"encoding/json"
 	"io/ioutil"
 	"log"
 	"regexp"
 
 	pg_query "github.com/pganalyze/pg_query_go/v2"
+	"github.com/tidwall/gjson"
 )
 
-var REGEX_UNHANLED_COMMANDS = regexp.MustCompile(`set\s+(time zone|enbale_)(.*?);`)
+var (
+	REGEX_UNHANLED_COMMANDS = regexp.MustCompile(`set\s+(time zone|enbale_)(.*?);`)
+	SHOULD_HANDLED_STMTS    = map[string]bool{
+		"PLpgSQL_stmt_raise":   false,
+		"PLpgSQL_stmt_execsql": true,
+	}
+)
 
 // 过滤部分关键词
 func filterUnhandledCommands(content string) string {
@@ -31,38 +37,22 @@ func main() {
 	if err != nil {
 		log.Fatalln("pg_query.ParsePlPgSqlToJSON err: ", err)
 	}
-	// fmt.Printf("%s\n", tree)
 
-	schema := new([]map[string]interface{})
+	res := gjson.Parse(tree).Array()
 
-	err = json.Unmarshal([]byte(tree), &schema)
-	if err != nil {
-		log.Fatalln("json.Unmarshal err: ", err)
-	}
+	for _, v := range res {
+		actions := v.Get("PLpgSQL_function.action.PLpgSQL_stmt_block.body").Array()
 
-	blackStmts := map[string]bool{
-		"PLpgSQL_stmt_raise": true,
-	}
-
-	// 数组遍历
-	for _, v := range *schema {
-		actions := v["PLpgSQL_function"].(map[string]interface{})["action"].(map[string]interface{})["PLpgSQL_stmt_block"].(map[string]interface{})["body"].([]interface{})
 		for _, action := range actions {
 			// 遍历对象属性
-			for k, v := range action.(map[string]interface{}) {
-				if _, ok := blackStmts[k]; ok {
+			for k, v := range action.Value().(map[string]interface{}) {
+				if _, ok := SHOULD_HANDLED_STMTS[k]; ok {
 					continue
 				}
 
 				log.Printf("%s: %v\n", k, v)
-				// if k == "PLpgSQL_stmt_dynfunc_call" {
-				// 	// fmt.Printf("%s: %v\n", k, v)
-				// 	fmt.Printf("%s\n", v.(map[string]interface{})["funcname"].(map[string]interface{})["str"].(string))
-				// }
 			}
-
 		}
-
 	}
 
 	/*a := make(map[string]interface{})
