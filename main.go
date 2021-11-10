@@ -14,6 +14,7 @@ var (
 	SHOULD_HANDLED_STMTS    = map[string]bool{
 		"PLpgSQL_stmt_raise":   false,
 		"PLpgSQL_stmt_execsql": true,
+		"PLpgSQL_stmt_assign":  false,
 	}
 )
 
@@ -45,11 +46,22 @@ func main() {
 
 		for _, action := range actions {
 			action.ForEach(func(key, value gjson.Result) bool {
-				if _, ok := SHOULD_HANDLED_STMTS[key.String()]; ok {
+				// 没有配置，或者屏蔽掉的
+				if enable, ok := SHOULD_HANDLED_STMTS[key.String()]; !ok || !enable {
 					return false
 				}
 
 				log.Printf("%s: %s\n", key, value)
+
+				// 递归调用 Parse
+				_, err := pg_query.ParseToJSON(value.Get("sqlstmt.PLpgSQL_expr.query").String())
+				if err != nil {
+					log.Fatalf("pg_query.ParseToJSON err: %s, sql: %s", err, value.String())
+				}
+
+				// log.Printf("%s: %s\n", key, tree)
+				// 每个都解析完了，怎么办？
+
 				return true
 			})
 
