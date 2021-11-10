@@ -44,14 +44,15 @@ func main() {
 		actions := v.Get("PLpgSQL_function.action.PLpgSQL_stmt_block.body").Array()
 
 		for _, action := range actions {
-			// 遍历对象属性
-			for k, v := range action.Value().(map[string]interface{}) {
-				if _, ok := SHOULD_HANDLED_STMTS[k]; ok {
-					continue
+			action.ForEach(func(key, value gjson.Result) bool {
+				if _, ok := SHOULD_HANDLED_STMTS[key.String()]; ok {
+					return false
 				}
 
-				log.Printf("%s: %v\n", k, v)
-			}
+				log.Printf("%s: %s\n", key, value)
+				return true
+			})
+
 		}
 	}
 
