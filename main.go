@@ -1,21 +1,38 @@
 package main
 
 import (
-	"io/ioutil"
+	"database/sql"
+	"fmt"
 	"log"
 	"regexp"
 
 	pg_query "github.com/pganalyze/pg_query_go/v2"
 	"github.com/tidwall/gjson"
+
+	_ "github.com/lib/pq"
 )
 
 var (
 	REGEX_UNHANLED_COMMANDS = regexp.MustCompile(`set\s+(time zone|enbale_)(.*?);`)
-	SHOULD_HANDLED_STMTS    = map[string]bool{
-		"PLpgSQL_stmt_raise":   false,
-		"PLpgSQL_stmt_execsql": true,
-		"PLpgSQL_stmt_assign":  false,
+	PLPGSQL_BLACKLIST_STMTS = map[string]bool{
+		"PLpgSQL_stmt_raise":   true,
+		"PLpgSQL_stmt_execsql": false,
+		"PLpgSQL_stmt_assign":  true,
 	}
+	PLPGSQL_GET_FUNC_DEFINITION = `
+		SELECT nspname, proname, pg_get_functiondef(p.oid) as definition
+		FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+		WHERE nspname || '.' || proname = '%s'
+		LIMIT 1;
+	`
+)
+
+const (
+	DB_HOST     = ""
+	DB_PORT     = 5432
+	DB_USER     = ""
+	DB_PASSWORD = ""
+	DB_NAME     = ""
 )
 
 // 过滤部分关键词
@@ -25,14 +42,41 @@ func filterUnhandledCommands(content string) string {
 
 func main() {
 
-	// 解析SQL文件
-	content, err := ioutil.ReadFile("./sql/dwictf6_func_fact_failpart.sql")
+	udf := "dwictf6.func_fact_failpart"
+
+	// 创建 PG 数据库连接，并执行SQL语句
+	psqlInfo := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable",
+		DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME)
+	db, err := sql.Open("postgres", psqlInfo)
 	if err != nil {
-		log.Fatalln("ioutil.ReadFile err: ", err)
+		log.Fatalln("sql.Open err: ", err)
+	}
+	defer db.Close()
+
+	rows, err := db.Query(fmt.Sprintf(PLPGSQL_GET_FUNC_DEFINITION, udf))
+	if err != nil {
+		log.Fatalln("db.Query err: ", err)
+	}
+	defer rows.Close()
+
+	var nspname string
+	var proname string
+	var definition string
+
+	for rows.Next() {
+		err := rows.Scan(&nspname, &proname, &definition)
+		switch err {
+		case sql.ErrNoRows:
+			fmt.Println("No rows were returned")
+		case nil:
+			fmt.Printf("Data row = (%s, %s)\n", nspname, proname)
+		default:
+			log.Fatalln("rows.Scan err: ", err)
+		}
 	}
 
 	// 字符串过滤
-	plpgsql := filterUnhandledCommands(string(content))
+	plpgsql := filterUnhandledCommands(definition)
 
 	tree, err := pg_query.ParsePlPgSqlToJSON(plpgsql)
 	if err != nil {
@@ -47,19 +91,19 @@ func main() {
 		for _, action := range actions {
 			action.ForEach(func(key, value gjson.Result) bool {
 				// 没有配置，或者屏蔽掉的
-				if enable, ok := SHOULD_HANDLED_STMTS[key.String()]; !ok || !enable {
+				if enable, ok := PLPGSQL_BLACKLIST_STMTS[key.String()]; ok && enable {
 					return false
 				}
 
 				log.Printf("%s: %s\n", key, value)
 
 				// 递归调用 Parse
-				_, err := pg_query.ParseToJSON(value.Get("sqlstmt.PLpgSQL_expr.query").String())
+				tree, err := pg_query.ParseToJSON(value.Get("sqlstmt.PLpgSQL_expr.query").String())
 				if err != nil {
 					log.Fatalf("pg_query.ParseToJSON err: %s, sql: %s", err, value.String())
 				}
 
-				// log.Printf("%s: %s\n", key, tree)
+				log.Printf("%s: %s\n", key, tree)
 				// 每个都解析完了，怎么办？
 
 				return true
