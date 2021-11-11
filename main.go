@@ -6,6 +6,7 @@ import (
 	"log"
 	"regexp"
 
+	"github.com/neo4j/neo4j-go-driver/v4/neo4j"
 	pg_query "github.com/pganalyze/pg_query_go/v2"
 	"github.com/tidwall/gjson"
 
@@ -29,11 +30,14 @@ var (
 )
 
 const (
-	DB_HOST     = ""
-	DB_PORT     = 
-	DB_USER     = ""
-	DB_PASSWORD = ""
-	DB_NAME     = ""
+	DB_HOST        = "xxxx"
+	DB_PORT        = 5494
+	DB_USER        = "xxxx"
+	DB_PASSWORD    = "xxxxxx"
+	DB_NAME        = "bdc"
+	NEO4J_URL      = "neo4j://localhost:7687"
+	NEO4J_USER     = "neo4j"
+	NEO4J_PASSWORD = "neo4j123"
 )
 
 type Record struct {
@@ -43,6 +47,8 @@ type Record struct {
 	Columns    []string
 	Comment    string
 	Visited    string
+	Layer      string
+	DB         string
 }
 
 type SqlTree struct {
@@ -105,6 +111,14 @@ func main() {
 	}
 	defer db.Close()
 
+	driver, err := neo4j.NewDriver(NEO4J_URL, neo4j.BasicAuth(NEO4J_USER, NEO4J_PASSWORD, ""))
+	if err != nil {
+		log.Fatalf("neo4j.NewDriver err: %s", err)
+	}
+	// Handle driver lifetime based on your application lifetime requirements  driver's lifetime is usually
+	// bound by the application lifetime, which usually implies one driver instance per application
+	defer driver.Close()
+
 	rows, err := db.Query(fmt.Sprintf(PLPGSQL_GET_FUNC_DEFINITION, udf))
 	if err != nil {
 		log.Fatalln("db.Query err: ", err)
@@ -152,6 +166,14 @@ func main() {
 				}
 
 				log.Printf("%s Parser: %#v\n", key, *sqlTree)
+				// 写入 Neo4j
+				// neo4j.WriteToNeo4j(sqlTree)
+
+				item, err := insertItem(driver)
+				if err != nil {
+					log.Fatalf("insertItem err: %s", err)
+				}
+				log.Printf("insertItem %v\n", item)
 
 				return true
 			})
@@ -165,4 +187,45 @@ func main() {
 	// 识别哪些是临时表，哪些是实体表
 	// 写入数据库
 	// 入库以后怎么查出来
+}
+
+func insertItem(driver neo4j.Driver) (*Item, error) {
+	// Sessions are short-lived, cheap to create and NOT thread safe. Typically create one or more sessions
+	// per request in your web application. Make sure to call Close on the session when done.
+	// For multi-database support, set sessionConfig.DatabaseName to requested database
+	// Session config will default to write mode, if only reads are to be used configure session for
+	// read mode.
+	session := driver.NewSession(neo4j.SessionConfig{})
+	defer session.Close()
+	result, err := session.WriteTransaction(createItemFn)
+	if err != nil {
+		return nil, err
+	}
+	return result.(*Item), nil
+}
+
+func createItemFn(tx neo4j.Transaction) (interface{}, error) {
+	records, err := tx.Run("CREATE (n:Item { id: $id, name: $name }) RETURN n.id, n.name", map[string]interface{}{
+		"id":   1,
+		"name": "Item 1",
+	})
+	// In face of driver native errors, make sure to return them directly.
+	// Depending on the error, the driver may try to execute the function again.
+	if err != nil {
+		return nil, err
+	}
+	record, err := records.Single()
+	if err != nil {
+		return nil, err
+	}
+	// You can also retrieve values by name, with e.g. `id, found := record.Get("n.id")`
+	return &Item{
+		Id:   record.Values[0].(int64),
+		Name: record.Values[1].(string),
+	}, nil
+}
+
+type Item struct {
+	Id   int64
+	Name string
 }
