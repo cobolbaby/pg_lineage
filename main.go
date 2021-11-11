@@ -30,10 +30,10 @@ var (
 )
 
 const (
-	DB_HOST        = "xxxx"
-	DB_PORT        = 5494
-	DB_USER        = "xxxx"
-	DB_PASSWORD    = "xxxxxx"
+	DB_HOST        = "localhost"
+	DB_PORT        = 5432
+	DB_USER        = "postgres"
+	DB_PASSWORD    = "******"
 	DB_NAME        = "bdc"
 	NEO4J_URL      = "neo4j://localhost:7687"
 	NEO4J_USER     = "neo4j"
@@ -48,13 +48,21 @@ type Record struct {
 	Comment    string
 	Visited    string
 	Layer      string
-	DB         string
+	Database   string
+}
+
+type Op struct {
+	Type       string
+	ProcName   string
+	SchemaName string
+	Comment    string
+	Args       []string
 }
 
 type SqlTree struct {
-	Source []*Record `json:"source"`
-	Target []*Record `json:"target"`
-	Op     string    `json:"op"`
+	Source []*Record `json:"sources"`
+	Target []*Record `json:"targets"`
+	Edge   []*Op     `json:"ops"`
 }
 
 func SQLParser(operator, plan string) (*SqlTree, error) {
@@ -167,13 +175,9 @@ func main() {
 
 				log.Printf("%s Parser: %#v\n", key, *sqlTree)
 				// 写入 Neo4j
-				// neo4j.WriteToNeo4j(sqlTree)
-
-				item, err := insertItem(driver)
-				if err != nil {
+				if err := insertGraph(driver, sqlTree); err != nil {
 					log.Fatalf("insertItem err: %s", err)
 				}
-				log.Printf("insertItem %v\n", item)
 
 				return true
 			})
@@ -189,7 +193,7 @@ func main() {
 	// 入库以后怎么查出来
 }
 
-func insertItem(driver neo4j.Driver) (*Item, error) {
+func insertGraph(driver neo4j.Driver, graph *SqlTree) error {
 	// Sessions are short-lived, cheap to create and NOT thread safe. Typically create one or more sessions
 	// per request in your web application. Make sure to call Close on the session when done.
 	// For multi-database support, set sessionConfig.DatabaseName to requested database
@@ -197,32 +201,54 @@ func insertItem(driver neo4j.Driver) (*Item, error) {
 	// read mode.
 	session := driver.NewSession(neo4j.SessionConfig{})
 	defer session.Close()
-	result, err := session.WriteTransaction(createItemFn)
-	if err != nil {
-		return nil, err
-	}
-	return result.(*Item), nil
-}
 
-func createItemFn(tx neo4j.Transaction) (interface{}, error) {
-	records, err := tx.Run("CREATE (n:Item { id: $id, name: $name }) RETURN n.id, n.name", map[string]interface{}{
-		"id":   1,
-		"name": "Item 1",
+	_, err := session.WriteTransaction(func(tx neo4j.Transaction) (interface{}, error) {
+		// 写入图
+		// if err := neo4j.WriteToNeo4j(tx, graph); err != nil {
+		// 	return nil, err
+		// }
+
+		// 先创建点，再连线
+		// 创建点
+		for _, v := range graph.Source {
+			if err := neo4j.CreateNode(tx, v); err != nil {
+				return nil, err
+			}
+		}
+		// 创建点
+		for _, v := range graph.Target {
+			if err := neo4j.CreateNode(tx, v); err != nil {
+				return nil, err
+			}
+		}
+		// 创建线
+		for _, v := range graph.Edge {
+			if err := neo4j.CreateEdge(tx, v); err != nil {
+				return nil, err
+			}
+		}
+
+		records, err := tx.Run("CREATE (n:Item { id: $id, name: $name }) RETURN n.id, n.name", map[string]interface{}{
+			"id":   1,
+			"name": "Item 1",
+		})
+		// In face of driver native errors, make sure to return them directly.
+		// Depending on the error, the driver may try to execute the function again.
+		if err != nil {
+			return nil, err
+		}
+		record, err := records.Single()
+		if err != nil {
+			return nil, err
+		}
+		// You can also retrieve values by name, with e.g. `id, found := record.Get("n.id")`
+		return &Item{
+			Id:   record.Values[0].(int64),
+			Name: record.Values[1].(string),
+		}, nil
 	})
-	// In face of driver native errors, make sure to return them directly.
-	// Depending on the error, the driver may try to execute the function again.
-	if err != nil {
-		return nil, err
-	}
-	record, err := records.Single()
-	if err != nil {
-		return nil, err
-	}
-	// You can also retrieve values by name, with e.g. `id, found := record.Get("n.id")`
-	return &Item{
-		Id:   record.Values[0].(int64),
-		Name: record.Values[1].(string),
-	}, nil
+
+	return err
 }
 
 type Item struct {
