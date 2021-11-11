@@ -18,6 +18,7 @@ var (
 		"PLpgSQL_stmt_raise":   true,
 		"PLpgSQL_stmt_execsql": false,
 		"PLpgSQL_stmt_assign":  true,
+		"PLpgSQL_stmt_if":      true,
 	}
 	PLPGSQL_GET_FUNC_DEFINITION = `
 		SELECT nspname, proname, pg_get_functiondef(p.oid) as definition
@@ -29,11 +30,62 @@ var (
 
 const (
 	DB_HOST     = ""
-	DB_PORT     = 5432
+	DB_PORT     = 
 	DB_USER     = ""
 	DB_PASSWORD = ""
 	DB_NAME     = ""
 )
+
+type Record struct {
+	SchemaName string
+	RelName    string
+	Type       string
+	Columns    []string
+	Comment    string
+	Visited    string
+}
+
+type SqlTree struct {
+	Source []*Record `json:"source"`
+	Target []*Record `json:"target"`
+	Op     string    `json:"op"`
+}
+
+func SQLParser(operator, plan string) (*SqlTree, error) {
+	// log.Printf("%s: %s\n", operator, plan)
+
+	sqlTree := &SqlTree{}
+
+	switch operator {
+
+	case "PLpgSQL_stmt_execsql":
+		// TODO:如果执行的是 select into
+		subQuery := gjson.Get(plan, "sqlstmt.PLpgSQL_expr.query").String()
+
+		subTree, err := pg_query.ParseToJSON(subQuery)
+		if err != nil {
+			return sqlTree, err
+		}
+
+		stmts := gjson.Get(subTree, "stmts").Array()
+		for _, v := range stmts {
+
+			fromClause := v.Get("stmt.SelectStmt.fromClause").Array()
+			for _, vv := range fromClause {
+
+				sqlTree.Source = append(sqlTree.Source, &Record{
+					RelName:    vv.Get("RangeVar.relname").String(),
+					SchemaName: vv.Get("RangeVar.schemaname").String(),
+					Type:       "table",
+				})
+			}
+
+		}
+
+	}
+
+	return sqlTree, nil
+}
 
 // 过滤部分关键词
 func filterUnhandledCommands(content string) string {
@@ -83,47 +135,29 @@ func main() {
 		log.Fatalln("pg_query.ParsePlPgSqlToJSON err: ", err)
 	}
 
-	res := gjson.Parse(tree).Array()
+	for _, v := range gjson.Parse(tree).Array() {
 
-	for _, v := range res {
-		actions := v.Get("PLpgSQL_function.action.PLpgSQL_stmt_block.body").Array()
-
-		for _, action := range actions {
+		for _, action := range v.Get("PLpgSQL_function.action.PLpgSQL_stmt_block.body").Array() {
+			// 遍历属性
 			action.ForEach(func(key, value gjson.Result) bool {
 				// 没有配置，或者屏蔽掉的
 				if enable, ok := PLPGSQL_BLACKLIST_STMTS[key.String()]; ok && enable {
 					return false
 				}
 
-				log.Printf("%s: %s\n", key, value)
-
 				// 递归调用 Parse
-				tree, err := pg_query.ParseToJSON(value.Get("sqlstmt.PLpgSQL_expr.query").String())
+				sqlTree, err := SQLParser(key.String(), value.String())
 				if err != nil {
 					log.Fatalf("pg_query.ParseToJSON err: %s, sql: %s", err, value.String())
 				}
 
-				log.Printf("%s: %s\n", key, tree)
-				// 每个都解析完了，怎么办？
+				log.Printf("%s Parser: %#v\n", key, *sqlTree)
 
 				return true
 			})
 
 		}
 	}
-
-	/*a := make(map[string]interface{})
-	a["name"] = "dwictf6_func_fact_failpart"
-	a["schema"] = "public"
-	a["type"] = "table"
-	a["columns"] = make([]interface{}, 0)
-	a["constraints"] = make([]interface{}, 0)
-	a["indexes"] = make([]interface{}, 0)
-	a["triggers"] = make([]interface{}, 0)
-	a["rules"] = make([]interface{}, 0)
-	a["comments"] = make([]interface{}, 0)
-	a["data"] = make([]interface{}, 0)
-	a["children"] = make([]interface{}, 0)*/
 
 	// 判断是否可以直接生成图
 	// 如果可以直接出图，则直接构造图
