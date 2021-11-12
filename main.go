@@ -17,10 +17,12 @@ import (
 var (
 	REGEX_UNHANLED_COMMANDS = regexp.MustCompile(`set\s+(time zone|enbale_)(.*?);`)
 	PLPGSQL_BLACKLIST_STMTS = map[string]bool{
-		"PLpgSQL_stmt_raise":   true,
-		"PLpgSQL_stmt_execsql": false,
-		"PLpgSQL_stmt_assign":  true,
-		"PLpgSQL_stmt_if":      true,
+		"PLpgSQL_stmt_assign":     true,
+		"PLpgSQL_stmt_raise":      true,
+		"PLpgSQL_stmt_execsql":    false,
+		"PLpgSQL_stmt_if":         true,
+		"PLpgSQL_stmt_dynexecute": true,  // 比较复杂，不太好支持
+		"PLpgSQL_stmt_perform":    false, // 暂不支持
 	}
 	PLPGSQL_GET_FUNC_DEFINITION = `
 		SELECT nspname, proname, pg_get_functiondef(p.oid) as definition

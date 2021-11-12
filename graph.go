@@ -35,11 +35,14 @@ func CreateGraph(driver neo4j.Driver, graph *SqlTree) error {
 
 // 创建图中节点
 func CreateNode(tx neo4j.Transaction, r *Record) (*Record, error) {
-	records, err := tx.Run("CREATE (n:Table { id: $id, schema_name: $schema_name, rel_name: $rel_name }) RETURN n.id",
+	// 需要将 ID 作为唯一主键
+	// CREATE CONSTRAINT ON (cc:CreditCard) ASSERT cc.number IS UNIQUE
+	records, err := tx.Run("CREATE (n:Table { id: $id, schema_name: $schema_name, rel_name: $rel_name, type: $type }) RETURN n.id",
 		map[string]interface{}{
 			"id":          r.SchemaName + "." + r.RelName,
 			"schema_name": r.SchemaName,
 			"rel_name":    r.RelName,
+			"type":        r.Type,
 		})
 	// In face of driver native errors, make sure to return them directly.
 	// Depending on the error, the driver may try to execute the function again.
