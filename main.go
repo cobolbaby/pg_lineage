@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"regexp"
+	"time"
 
 	"github.com/neo4j/neo4j-go-driver/v4/neo4j"
 	pg_query "github.com/pganalyze/pg_query_go/v2"
@@ -29,16 +30,11 @@ var (
 	`
 )
 
-const (
-	DB_HOST        = "localhost"
-	DB_PORT        = 5432
-	DB_USER        = "postgres"
-	DB_PASSWORD    = "******"
-	DB_NAME        = "bdc"
-	NEO4J_URL      = "neo4j://localhost:7687"
-	NEO4J_USER     = "neo4j"
-	NEO4J_PASSWORD = "neo4j123"
-)
+type Owner struct {
+	Username string
+	Nickname string
+	ID       string
+}
 
 type Record struct {
 	SchemaName string
@@ -47,8 +43,13 @@ type Record struct {
 	Columns    []string
 	Comment    string
 	Visited    string
+	Size       int64
 	Layer      string
 	Database   string
+	Owner      *Owner
+	CreateTime time.Time
+	Labels     []string
+	ID         string
 }
 
 type Op struct {
@@ -57,48 +58,16 @@ type Op struct {
 	SchemaName string
 	Comment    string
 	Args       []string
+	Owner      *Owner
+	FromID     string
+	ToID       string
+	ID         string
 }
 
 type SqlTree struct {
 	Source []*Record `json:"sources"`
 	Target []*Record `json:"targets"`
 	Edge   []*Op     `json:"ops"`
-}
-
-func SQLParser(operator, plan string) (*SqlTree, error) {
-	// log.Printf("%s: %s\n", operator, plan)
-
-	sqlTree := &SqlTree{}
-
-	switch operator {
-
-	case "PLpgSQL_stmt_execsql":
-		// TODO:如果执行的是 select into
-		subQuery := gjson.Get(plan, "sqlstmt.PLpgSQL_expr.query").String()
-
-		subTree, err := pg_query.ParseToJSON(subQuery)
-		if err != nil {
-			return sqlTree, err
-		}
-
-		stmts := gjson.Get(subTree, "stmts").Array()
-		for _, v := range stmts {
-
-			fromClause := v.Get("stmt.SelectStmt.fromClause").Array()
-			for _, vv := range fromClause {
-
-				sqlTree.Source = append(sqlTree.Source, &Record{
-					RelName:    vv.Get("RangeVar.relname").String(),
-					SchemaName: vv.Get("RangeVar.schemaname").String(),
-					Type:       "table",
-				})
-			}
-
-		}
-
-	}
-
-	return sqlTree, nil
 }
 
 // 过滤部分关键词
@@ -143,7 +112,7 @@ func main() {
 		case sql.ErrNoRows:
 			fmt.Println("No rows were returned")
 		case nil:
-			fmt.Printf("Data row = (%s, %s)\n", nspname, proname)
+			fmt.Printf("Query Data = (%s, %s)\n", nspname, proname)
 		default:
 			log.Fatalln("rows.Scan err: ", err)
 		}
@@ -175,8 +144,8 @@ func main() {
 
 				log.Printf("%s Parser: %#v\n", key, *sqlTree)
 				// 写入 Neo4j
-				if err := insertGraph(driver, sqlTree); err != nil {
-					log.Fatalf("insertItem err: %s", err)
+				if err := CreateGraph(driver, sqlTree); err != nil {
+					log.Fatalf("CreateGraph err: %s", err)
 				}
 
 				return true
@@ -189,69 +158,5 @@ func main() {
 	// 如果可以直接出图，则直接构造图
 	// 再过滤，生成图
 	// 识别哪些是临时表，哪些是实体表
-	// 写入数据库
-	// 入库以后怎么查出来
-}
 
-func insertGraph(driver neo4j.Driver, graph *SqlTree) error {
-	// Sessions are short-lived, cheap to create and NOT thread safe. Typically create one or more sessions
-	// per request in your web application. Make sure to call Close on the session when done.
-	// For multi-database support, set sessionConfig.DatabaseName to requested database
-	// Session config will default to write mode, if only reads are to be used configure session for
-	// read mode.
-	session := driver.NewSession(neo4j.SessionConfig{})
-	defer session.Close()
-
-	_, err := session.WriteTransaction(func(tx neo4j.Transaction) (interface{}, error) {
-		// 写入图
-		// if err := neo4j.WriteToNeo4j(tx, graph); err != nil {
-		// 	return nil, err
-		// }
-
-		// 先创建点，再连线
-		// 创建点
-		for _, v := range graph.Source {
-			if err := neo4j.CreateNode(tx, v); err != nil {
-				return nil, err
-			}
-		}
-		// 创建点
-		for _, v := range graph.Target {
-			if err := neo4j.CreateNode(tx, v); err != nil {
-				return nil, err
-			}
-		}
-		// 创建线
-		for _, v := range graph.Edge {
-			if err := neo4j.CreateEdge(tx, v); err != nil {
-				return nil, err
-			}
-		}
-
-		records, err := tx.Run("CREATE (n:Item { id: $id, name: $name }) RETURN n.id, n.name", map[string]interface{}{
-			"id":   1,
-			"name": "Item 1",
-		})
-		// In face of driver native errors, make sure to return them directly.
-		// Depending on the error, the driver may try to execute the function again.
-		if err != nil {
-			return nil, err
-		}
-		record, err := records.Single()
-		if err != nil {
-			return nil, err
-		}
-		// You can also retrieve values by name, with e.g. `id, found := record.Get("n.id")`
-		return &Item{
-			Id:   record.Values[0].(int64),
-			Name: record.Values[1].(string),
-		}, nil
-	})
-
-	return err
-}
-
-type Item struct {
-	Id   int64
-	Name string
 }
