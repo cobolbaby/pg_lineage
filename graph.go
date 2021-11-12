@@ -37,7 +37,14 @@ func CreateGraph(driver neo4j.Driver, graph *SqlTree) error {
 func CreateNode(tx neo4j.Transaction, r *Record) (*Record, error) {
 	// 需要将 ID 作为唯一主键
 	// CREATE CONSTRAINT ON (cc:CreditCard) ASSERT cc.number IS UNIQUE
-	records, err := tx.Run("CREATE (n:Table { id: $id, schema_name: $schema_name, rel_name: $rel_name, type: $type }) RETURN n.id",
+	// MERGE (n:Table { id:  }) ON CREATE SET n.created = timestamp() ON MATCH SET n.lastAccessed = timestamp() RETURN n.name, n.created, n.lastAccessed
+	// records, err := tx.Run("CREATE (n:Table { id: $id, schema_name: $schema_name, rel_name: $rel_name, type: $type }) RETURN n.id",
+	records, err := tx.Run(`
+		MERGE (n:Table { id: $id }) 
+		ON CREATE SET n.schema_name = $schema_name, n.rel_name = $rel_name, n.type = $type, n.udt = timestamp()
+		ON MATCH SET n.udt = timestamp()
+		RETURN n.id
+	`,
 		map[string]interface{}{
 			"id":          r.SchemaName + "." + r.RelName,
 			"schema_name": r.SchemaName,

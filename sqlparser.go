@@ -50,6 +50,20 @@ func SQLParser(sqlTree *SqlTree, operator, plan string) error {
 						Type:       vv.Get("RangeVar.relpersistence").String(),
 					})
 				}
+
+			}
+
+			// 单独创建 table
+			if v.Get("stmt.CreateStmt").Exists() {
+				if v.Get("stmt.CreateStmt.relation").Exists() {
+					relation := v.Get("stmt.CreateStmt.relation")
+					sqlTree.Target = append(sqlTree.Target, &Record{
+						RelName:    relation.Get("relname").String(),
+						SchemaName: relation.Get("schemaname").String(),
+						Type:       relation.Get("relpersistence").String(),
+					})
+
+				}
 			}
 
 			// 如果该 SQL 为 delete 操作，则填充目标节点
@@ -264,6 +278,7 @@ func SQLParser(sqlTree *SqlTree, operator, plan string) error {
 									})
 							}
 						}
+						// TODO:"fromClause":[{"RangeVar":{"relname":"temp_invalid_data","inh":true,"relpersistence":"p","location":135}}],"limitOption":"LIMIT_OPTION_DEFAULT","op":"SETOP_NONE"}}
 						if vv.Get("RangeVar").Exists() {
 							sqlTree.Source = append(sqlTree.Source, &Record{
 								RelName:    vv.Get("RangeVar.relname").String(),
@@ -283,11 +298,19 @@ func SQLParser(sqlTree *SqlTree, operator, plan string) error {
 
 			// update 语句
 			if v.Get("stmt.UpdateStmt").Exists() {
+
+				// TODO:需支持关联更新 "fromClause":[{"RangeVar":{"schemaname":"dm","relname":"hpe_mmp_workobjectinfo","inh":true,"relpersistence":"p","alias":{"aliasname":"s"},"location":58}}]}}}]}
+
 				sqlTree.Target = append(sqlTree.Target, &Record{
 					RelName:    v.Get("stmt.UpdateStmt.relation.relname").String(),
 					SchemaName: v.Get("stmt.UpdateStmt.relation.schemaname").String(),
 					Type:       v.Get("stmt.UpdateStmt.relation.relpersistence").String(),
 				})
+			}
+
+			// ignore
+			if v.Get("stmt.VacuumStmt").Exists() {
+				break
 			}
 		}
 

@@ -15,7 +15,7 @@ import (
 )
 
 var (
-	REGEX_UNHANLED_COMMANDS = regexp.MustCompile(`set\s+(time zone|enbale_)(.*?);`)
+	REGEX_UNHANLED_COMMANDS = regexp.MustCompile(`set\s+(time zone|enable)(.*?);`)
 	PLPGSQL_BLACKLIST_STMTS = map[string]bool{
 		"PLpgSQL_stmt_assign":     true,
 		"PLpgSQL_stmt_raise":      true,
@@ -79,7 +79,7 @@ func filterUnhandledCommands(content string) string {
 
 func main() {
 
-	udf := "dwictf6.func_fact_failpart"
+	udf := "dm.func_validate_hpe_mmp_workobjectstatus"
 
 	// 创建 PG 数据库连接，并执行SQL语句
 	psqlInfo := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable",
@@ -122,6 +122,7 @@ func main() {
 
 	// 字符串过滤
 	plpgsql := filterUnhandledCommands(definition)
+	log.Printf(plpgsql)
 
 	tree, err := pg_query.ParsePlPgSqlToJSON(plpgsql)
 	if err != nil {
