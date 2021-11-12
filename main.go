@@ -128,6 +128,8 @@ func main() {
 
 	for _, v := range gjson.Parse(tree).Array() {
 
+		sqlTree := &SqlTree{}
+
 		for _, action := range v.Get("PLpgSQL_function.action.PLpgSQL_stmt_block.body").Array() {
 			// 遍历属性
 			action.ForEach(func(key, value gjson.Result) bool {
@@ -137,20 +139,19 @@ func main() {
 				}
 
 				// 递归调用 Parse
-				sqlTree, err := SQLParser(key.String(), value.String())
-				if err != nil {
-					log.Fatalf("pg_query.ParseToJSON err: %s, sql: %s", err, value.String())
-				}
-
-				log.Printf("%s Parser: %#v\n", key, *sqlTree)
-				// 写入 Neo4j
-				if err := CreateGraph(driver, sqlTree); err != nil {
-					log.Fatalf("CreateGraph err: %s", err)
+				if err := SQLParser(sqlTree, key.String(), value.String()); err != nil {
+					log.Printf("pg_query.ParseToJSON err: %s, sql: %s", err, value.String())
+					return false
 				}
 
 				return true
 			})
 
+		}
+
+		// log.Printf("%s Parser: %#v\n", key, *sqlTree)
+		if err := CreateGraph(driver, sqlTree); err != nil {
+			log.Printf("CreateGraph err: %s", err)
 		}
 	}
 
