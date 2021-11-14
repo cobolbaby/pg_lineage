@@ -79,6 +79,9 @@ func filterUnhandledCommands(content string) string {
 
 func main() {
 
+	// TODO:支持控制台输入
+	// TODO:支持获取pg_stat_statements中的sql语句
+
 	udf := "dm.func_validate_hpe_mmp_workobjectstatus"
 
 	// 创建 PG 数据库连接，并执行SQL语句
