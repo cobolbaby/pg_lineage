@@ -15,14 +15,14 @@ import (
 )
 
 var (
-	REGEX_UNHANLED_COMMANDS = regexp.MustCompile(`set\s+(time zone|enable)(.*?);`)
-	PLPGSQL_BLACKLIST_STMTS = map[string]bool{
+	PLPGSQL_UNHANLED_COMMANDS = regexp.MustCompile(`set\s+(time zone|enable)(.*?);`)
+	PLPGSQL_BLACKLIST_STMTS   = map[string]bool{
 		"PLpgSQL_stmt_assign":     true,
 		"PLpgSQL_stmt_raise":      true,
 		"PLpgSQL_stmt_execsql":    false,
 		"PLpgSQL_stmt_if":         true,
-		"PLpgSQL_stmt_dynexecute": true,  // 比较复杂，不太好支持
-		"PLpgSQL_stmt_perform":    false, // 暂不支持
+		"PLpgSQL_stmt_dynexecute": true, // 比较复杂，不太好支持
+		"PLpgSQL_stmt_perform":    true, // 暂不支持
 	}
 	PLPGSQL_GET_FUNC_DEFINITION = `
 		SELECT nspname, proname, pg_get_functiondef(p.oid) as definition
@@ -74,7 +74,7 @@ type SqlTree struct {
 
 // 过滤部分关键词
 func filterUnhandledCommands(content string) string {
-	return REGEX_UNHANLED_COMMANDS.ReplaceAllString(content, "")
+	return PLPGSQL_UNHANLED_COMMANDS.ReplaceAllString(content, "")
 }
 
 func main() {
@@ -122,7 +122,7 @@ func main() {
 
 	// 字符串过滤
 	plpgsql := filterUnhandledCommands(definition)
-	log.Printf(plpgsql)
+	// log.Printf(plpgsql)
 
 	tree, err := pg_query.ParsePlPgSqlToJSON(plpgsql)
 	if err != nil {
@@ -157,10 +157,5 @@ func main() {
 			log.Printf("CreateGraph err: %s", err)
 		}
 	}
-
-	// 判断是否可以直接生成图
-	// 如果可以直接出图，则直接构造图
-	// 再过滤，生成图
-	// 识别哪些是临时表，哪些是实体表
 
 }

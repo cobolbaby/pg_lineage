@@ -15,7 +15,7 @@ func CreateGraph(driver neo4j.Driver, graph *SqlTree) error {
 
 	_, err := session.WriteTransaction(func(tx neo4j.Transaction) (interface{}, error) {
 		// 创建点
-		for _, v := range append(graph.Source, graph.Target...) {
+		for _, v := range deduplicateNodes(append(graph.Source, graph.Target...)) {
 			if _, err := CreateNode(tx, v); err != nil {
 				return nil, err
 			}
@@ -33,6 +33,28 @@ func CreateGraph(driver neo4j.Driver, graph *SqlTree) error {
 	return err
 }
 
+func deduplicateNodes(nodes []*Record) []*Record {
+	var unique []*Record
+	uniqueMap := make(map[string]int)
+
+	for _, v := range nodes {
+		if v.SchemaName == "" {
+			// TODO:需要定义为 proc 的名称
+			v.SchemaName = ""
+		}
+		v.ID = v.SchemaName + "." + v.RelName
+
+		if _, ok := uniqueMap[v.ID]; !ok {
+			uniqueMap[v.ID] = 1
+			unique = append(unique, v)
+		} else {
+			uniqueMap[v.ID]++
+		}
+	}
+
+	return unique
+}
+
 // 创建图中节点
 func CreateNode(tx neo4j.Transaction, r *Record) (*Record, error) {
 	// 需要将 ID 作为唯一主键
@@ -46,7 +68,7 @@ func CreateNode(tx neo4j.Transaction, r *Record) (*Record, error) {
 		RETURN n.id
 	`,
 		map[string]interface{}{
-			"id":          r.SchemaName + "." + r.RelName,
+			"id":          r.ID,
 			"schema_name": r.SchemaName,
 			"rel_name":    r.RelName,
 			"type":        r.Type,
