@@ -5,6 +5,8 @@ import (
 
 	pg_query "github.com/pganalyze/pg_query_go/v2"
 	"github.com/tidwall/gjson"
+
+	"lineage/depgraph"
 )
 
 const (
@@ -12,7 +14,7 @@ const (
 	REL_PERSIST_NOT = "t"
 )
 
-func SQLParser(sqlTree *SqlTree, operator, plan string) error {
+func SQLParser(sqlTree *depgraph.Graph, operator, plan string) error {
 	log.Printf("%s: %s\n", operator, plan)
 
 	var subTree string
@@ -53,28 +55,35 @@ func SQLParser(sqlTree *SqlTree, operator, plan string) error {
 			if cvv.Get("query.SelectStmt.withClause").Exists() {
 				ctes := cvv.Get("query.SelectStmt.withClause.ctes").Array()
 				for _, vv := range ctes {
-
-					if r := parseFromClause(vv.Get("CommonTableExpr.ctequery.SelectStmt")); r != nil {
-						sqlTree.Source = append(sqlTree.Source, r...)
-					}
-					sqlTree.Target = append(sqlTree.Target, &Record{
+					tnode := &Record{
 						RelName:    vv.Get("CommonTableExpr.ctename").String(),
 						SchemaName: "",
 						Type:       REL_PERSIST_NOT,
-					})
-				}
-			}
-			if cvv.Get("query.SelectStmt.fromClause").Exists() {
-				if r := parseFromClause(cvv.Get("query.SelectStmt")); r != nil {
-					sqlTree.Source = append(sqlTree.Source, r...)
+					}
+					sqlTree.CreateNode(tnode)
+					if r := parseFromClause(vv.Get("CommonTableExpr.ctequery.SelectStmt")); r != nil {
+						for _, rr := range r {
+							sqlTree.DependOn(tnode, rr)
+						}
+					}
 				}
 			}
 			if cvv.Get("into").Exists() {
-				sqlTree.Target = append(sqlTree.Target, &Record{
+
+				tnode := &Record{
 					RelName:    cvv.Get("into.rel.relname").String(),
 					SchemaName: cvv.Get("into.rel.schemaname").String(),
 					Type:       cvv.Get("into.rel.relpersistence").String(),
-				})
+				}
+				sqlTree.CreateNode(tnode)
+
+				if cvv.Get("query.SelectStmt.fromClause").Exists() {
+					if r := parseFromClause(cvv.Get("query.SelectStmt")); r != nil {
+						for _, rr := range r {
+							sqlTree.DependOn(tnode, rr)
+						}
+					}
+				}
 			}
 		}
 
@@ -82,7 +91,7 @@ func SQLParser(sqlTree *SqlTree, operator, plan string) error {
 		if v.Get("stmt.CreateStmt").Exists() {
 			vv := v.Get("stmt.CreateStmt")
 			if r := parseRelname(vv); r != nil {
-				sqlTree.Target = append(sqlTree.Target, r)
+				sqlTree.CreateNode(r)
 			}
 		}
 
@@ -91,7 +100,10 @@ func SQLParser(sqlTree *SqlTree, operator, plan string) error {
 			vv := v.Get("stmt.SelectStmt")
 
 			if r := parseFromClause(vv); r != nil {
-				sqlTree.Source = append(sqlTree.Source, r...)
+				for _, rr := range r {
+					sqlTree.CreateNode(rr)
+				}
+
 			}
 		}
 
@@ -99,31 +111,37 @@ func SQLParser(sqlTree *SqlTree, operator, plan string) error {
 		// insert into tbl
 		if v.Get("stmt.InsertStmt").Exists() {
 			vv := v.Get("stmt.InsertStmt")
+			var tnode *Record
 
+			if tnode = parseRelname(vv); tnode != nil {
+				sqlTree.CreateNode(tnode)
+			}
 			if vv.Get("selectStmt").Exists() {
 				if r := parseFromClause(vv.Get("selectStmt.SelectStmt")); r != nil {
-					sqlTree.Source = append(sqlTree.Source, r...)
+					for _, rr := range r {
+						sqlTree.DependOn(tnode, rr)
+					}
 				}
 			}
 
-			if r := parseRelname(vv); r != nil {
-				sqlTree.Target = append(sqlTree.Target, r)
-			}
 		}
 
 		// update tbl set
 		// update tbl1 set from
 		if v.Get("stmt.UpdateStmt").Exists() {
 			vv := v.Get("stmt.UpdateStmt")
+			var tnode *Record
+
+			if tnode = parseRelname(vv); tnode != nil {
+				sqlTree.CreateNode(tnode)
+			}
 
 			if vv.Get("fromClause").Exists() {
 				if r := parseFromClause(vv); r != nil {
-					sqlTree.Source = append(sqlTree.Source, r...)
+					for _, rr := range r {
+						sqlTree.DependOn(tnode, rr)
+					}
 				}
-			}
-
-			if r := parseRelname(vv); r != nil {
-				sqlTree.Target = append(sqlTree.Target, r)
 			}
 
 		}
@@ -131,16 +149,18 @@ func SQLParser(sqlTree *SqlTree, operator, plan string) error {
 		// 如果该 SQL 为 delete 操作，则填充目标节点
 		if v.Get("stmt.DeleteStmt").Exists() {
 			vv := v.Get("stmt.DeleteStmt")
-
+			var tnode *Record
+			if tnode = parseRelname(vv); tnode != nil {
+				sqlTree.CreateNode(tnode)
+			}
 			if vv.Get("fromClause").Exists() {
 				if r := parseFromClause(vv); r != nil {
-					sqlTree.Source = append(sqlTree.Source, r...)
+					for _, rr := range r {
+						sqlTree.DependOn(tnode, rr)
+					}
 				}
 			}
 
-			if r := parseRelname(vv); r != nil {
-				sqlTree.Target = append(sqlTree.Target, r)
-			}
 		}
 
 	}

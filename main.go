@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	"lineage/depgraph"
 	"log"
 	"regexp"
 	"time"
@@ -72,6 +73,23 @@ type SqlTree struct {
 	Edge   []*Op     `json:"ops"`
 }
 
+// depmap tracks the nodes that have some dependency relationship to
+// some other node, represented by the key of the map.
+type depmap map[string]*Record
+
+type Graph struct {
+	nodes *Record
+
+	// Maintain dependency relationships in both directions. These
+	// data structures are the edges of the graph.
+
+	// `dependencies` tracks child -> parents.
+	dependencies depmap
+	// `dependents` tracks parent -> children.
+	dependents depmap
+	// Keep track of the nodes of the graph themselves.
+}
+
 // 过滤部分关键词
 func filterUnhandledCommands(content string) string {
 	return PLPGSQL_UNHANLED_COMMANDS.ReplaceAllString(content, "")
@@ -134,7 +152,7 @@ func main() {
 
 	for _, v := range gjson.Parse(tree).Array() {
 
-		sqlTree := &SqlTree{}
+		sqlTree := depgraph.New()
 
 		for _, action := range v.Get("PLpgSQL_function.action.PLpgSQL_stmt_block.body").Array() {
 			// 遍历属性

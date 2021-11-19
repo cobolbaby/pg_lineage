@@ -14,6 +14,10 @@ func CreateGraph(driver neo4j.Driver, graph *SqlTree) error {
 	defer session.Close()
 
 	_, err := session.WriteTransaction(func(tx neo4j.Transaction) (interface{}, error) {
+
+		// write one graph struc to Neo4j
+		// 顺序遍历节点及其依赖
+
 		// 创建点
 		for _, v := range deduplicateNodes(append(graph.Source, graph.Target...)) {
 			if _, err := CreateNode(tx, v); err != nil {
