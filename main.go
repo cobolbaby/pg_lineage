@@ -3,10 +3,12 @@ package main
 import (
 	"database/sql"
 	"fmt"
-	"lineage/depgraph"
 	"log"
 	"regexp"
+	"strings"
 	"time"
+
+	"github.com/cobolbaby/lineage/depgraph"
 
 	"github.com/neo4j/neo4j-go-driver/v4/neo4j"
 	pg_query "github.com/pganalyze/pg_query_go/v2"
@@ -55,39 +57,30 @@ type Record struct {
 	ID         string
 }
 
+func (r *Record) GetID() string {
+	if r.SchemaName != "" {
+		return r.SchemaName + "." + r.RelName
+	} else {
+		return r.RelName
+	}
+}
+
+func (r *Record) IsTemp() bool {
+	return r.SchemaName == "" ||
+		strings.HasPrefix(r.RelName, "temp_") ||
+		strings.HasPrefix(r.RelName, "tmp_") ||
+		strings.HasPrefix(r.RelName, "pg_")
+}
+
 type Op struct {
 	Type       string
 	ProcName   string
 	SchemaName string
 	Comment    string
-	Args       []string
 	Owner      *Owner
-	FromID     string
-	ToID       string
+	OrigID     string
+	DestID     string
 	ID         string
-}
-
-type SqlTree struct {
-	Source []*Record `json:"sources"`
-	Target []*Record `json:"targets"`
-	Edge   []*Op     `json:"ops"`
-}
-
-// depmap tracks the nodes that have some dependency relationship to
-// some other node, represented by the key of the map.
-type depmap map[string]*Record
-
-type Graph struct {
-	nodes *Record
-
-	// Maintain dependency relationships in both directions. These
-	// data structures are the edges of the graph.
-
-	// `dependencies` tracks child -> parents.
-	dependencies depmap
-	// `dependents` tracks parent -> children.
-	dependents depmap
-	// Keep track of the nodes of the graph themselves.
 }
 
 // 过滤部分关键词
@@ -101,6 +94,17 @@ func main() {
 	// TODO:支持获取pg_stat_statements中的sql语句
 
 	udf := "dm.func_validate_hpe_mmp_workobjectstatus"
+
+	op := &Op{
+		Type:       "plpgsql",
+		ProcName:   "func_validate_hpe_mmp_workobjectstatus",
+		SchemaName: "dm",
+		Comment:    "",
+		Owner:      &Owner{Username: "postgres", Nickname: "postgres", ID: "1"},
+		OrigID:     "",
+		DestID:     "",
+		ID:         "dm.func_validate_hpe_mmp_workobjectstatus",
+	}
 
 	// 创建 PG 数据库连接，并执行SQL语句
 	psqlInfo := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable",
@@ -174,7 +178,7 @@ func main() {
 		}
 
 		// log.Printf("%s Parser: %#v\n", key, *sqlTree)
-		if err := CreateGraph(driver, sqlTree); err != nil {
+		if err := CreateGraph(driver, sqlTree.ShrinkGraph(), op); err != nil {
 			log.Printf("CreateGraph err: %s", err)
 		}
 	}

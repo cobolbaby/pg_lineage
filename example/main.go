@@ -37,8 +37,24 @@ func (r *Record) IsTemp() bool {
 		r.SchemaName == ""
 }
 
+type Op struct {
+	Type       string
+	ProcName   string
+	SchemaName string
+	Comment    string
+	ID         string
+}
+
 func main() {
 	g := depgraph.New()
+
+	// op1 := &Op{
+	// 	Type:       "plpgsql",
+	// 	ProcName:   "func_insert_t1",
+	// 	SchemaName: "dw",
+	// 	Comment:    "create table t1",
+	// 	ID:         "dw.func_insert_t1",
+	// }
 
 	r1 := &Record{
 		SchemaName: "public",

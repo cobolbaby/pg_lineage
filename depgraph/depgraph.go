@@ -36,8 +36,16 @@ func New() *Graph {
 	}
 }
 
+func (g *Graph) GetNodes() nodeset {
+	return g.nodes
+}
+
+func (g *Graph) GetRelationships() depmap {
+	return g.dependents
+}
+
 // 增加点，并添加边
-func (g *Graph) DependOn(child, parent Node) error {
+func (g *Graph) DependOn(child Node, parent Node) error {
 	if child.GetID() == parent.GetID() {
 		return errors.New("self-referential dependencies not allowed")
 	}
@@ -46,18 +54,20 @@ func (g *Graph) DependOn(child, parent Node) error {
 		return errors.New("circular dependencies not allowed")
 	}
 
-	// Add nodes.
-	g.nodes[parent.GetID()] = parent
-	g.nodes[child.GetID()] = child
-
-	// Add edges.
-	addNodeToNodeset(g.dependents, parent.GetID(), child.GetID())
-	addNodeToNodeset(g.dependencies, child.GetID(), parent.GetID())
+	// Add nodes and edges
+	g.AddNode(parent).AddNode(child).AddEdge(parent, child)
 
 	return nil
 }
 
-func addNodeToNodeset(dm depmap, key, node string) {
+func (g *Graph) AddEdge(parent Node, child Node) *Graph {
+	addDependency(g.dependents, parent.GetID(), child.GetID())
+	addDependency(g.dependencies, child.GetID(), parent.GetID())
+
+	return g
+}
+
+func addDependency(dm depmap, key string, node string) {
 	nodes, ok := dm[key]
 	if !ok {
 		nodes = make(map[string]struct{})
@@ -66,10 +76,10 @@ func addNodeToNodeset(dm depmap, key, node string) {
 	nodes[node] = struct{}{}
 }
 
-func (g *Graph) AddNode(node Node) error {
+func (g *Graph) AddNode(node Node) *Graph {
 	g.nodes[node.GetID()] = node
 
-	return nil
+	return g
 }
 
 func (g *Graph) DependsOn(child, parent string) bool {
@@ -200,7 +210,7 @@ func (g *Graph) buildTransitive(root string, nextFn func(string) map[string]stru
 		discovered := []string{}
 		for _, node := range searchNext {
 			// For each node to discover, find the next nodes.
-			for nextNode := range nextFn(node) {
+			for nextNode, _ := range nextFn(node) {
 				// If we have not seen the node before, add it to the output as well
 				// as the list of nodes to traverse in the next iteration.
 				if _, ok := out[nextNode]; !ok {
