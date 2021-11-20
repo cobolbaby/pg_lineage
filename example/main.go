@@ -2,50 +2,81 @@ package main
 
 import (
 	"fmt"
-	"lineage/depgraph"
 	"strings"
+	"time"
+
+	"github.com/cobolbaby/lineage/depgraph"
 )
+
+type Record struct {
+	SchemaName string
+	RelName    string
+	Type       string
+	Columns    []string
+	Comment    string
+	Visited    string
+	Size       int64
+	Layer      string
+	Database   string
+	CreateTime time.Time
+	Labels     []string
+	ID         string
+}
+
+func (r *Record) GetID() string {
+	if r.SchemaName != "" {
+		return r.SchemaName + "." + r.RelName
+	} else {
+		return r.RelName
+	}
+}
+
+func (r *Record) IsTemp() bool {
+	return strings.HasPrefix(r.RelName, "temp_") ||
+		strings.HasPrefix(r.RelName, "tmp_") ||
+		r.SchemaName == ""
+}
 
 func main() {
 	g := depgraph.New()
 
-	r1 := &depgraph.Record{
+	r1 := &Record{
 		SchemaName: "public",
 		RelName:    "test_table",
 		Type:       "p",
 		ID:         "public.test_table",
 	}
-	r2 := &depgraph.Record{
+	r2 := &Record{
 		SchemaName: "public",
 		RelName:    "test_table2",
 		Type:       "p",
 		ID:         "public.test_table2",
 	}
-	r3 := &depgraph.Record{
+	r3 := &Record{
 		SchemaName: "",
 		RelName:    "temp_test_table3",
 		Type:       "t",
 		ID:         "temp_test_table3",
 	}
-	r4 := &depgraph.Record{
+	r4 := &Record{
 		SchemaName: "",
 		RelName:    "temp_test_table4",
 		Type:       "t",
 		ID:         "temp_test_table4",
 	}
-	r5 := &depgraph.Record{
+	r5 := &Record{
 		SchemaName: "dw",
 		RelName:    "test_table5",
 		Type:       "t",
 		ID:         "dw.test_table5",
 	}
-	r6 := &depgraph.Record{
+	r6 := &Record{
 		SchemaName: "dw",
 		RelName:    "test_table6",
 		Type:       "p",
 		ID:         "dw.test_table6",
 	}
-	r7 := &depgraph.Record{
+	r7 := &Record{
 		SchemaName: "dw",
 		RelName:    "test_table7",
 		Type:       "p",
@@ -53,19 +84,17 @@ func main() {
 	}
 
 	g.DependOn(r3, r1)
+	g.DependOn(r4, r2)
 	g.DependOn(r5, r3)
 	g.DependOn(r5, r4)
 	g.DependOn(r6, r5)
-	g.DependOn(r4, r2)
 	g.DependOn(r7, r5)
 
 	for i, layer := range g.ShrinkGraph().TopoSortedLayers() {
 		fmt.Printf("%d: %s\n", i, strings.Join(layer, ", "))
 	}
 	// Output:
-	// 0: feed, soil
-	// 1: grain
-	// 2: flour, chickens
-	// 3: eggs
-	// 4: cake
+	// 0: public.test_table, public.test_table2
+	// 1: dw.test_table5
+	// 2: dw.test_table6, dw.test_table7
 }
