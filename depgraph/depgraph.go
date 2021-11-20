@@ -9,12 +9,10 @@ type Node interface {
 	IsTemp() bool
 }
 
-// A node in this graph is just a string, so a nodeset is a map whose
-// keys are the nodes that are present.
+// 节点集合，为了方便扩展，Node定义为接口类型
 type nodeset map[string]Node
 
-// depmap tracks the nodes that have some dependency relationship to
-// some other node, represented by the key of the map.
+// 采用邻接列表的方式存储节点间的依赖关系
 type depmap map[string]map[string]struct{}
 
 type Graph struct {
@@ -23,9 +21,9 @@ type Graph struct {
 	// Maintain dependency relationships in both directions. These
 	// data structures are the edges of the graph.
 
-	// `dependencies` tracks child -> parents.
+	// `dependencies` tracks child -> parents. 依靠
 	dependencies depmap
-	// `dependents` tracks parent -> children.
+	// `dependents` tracks parent -> children. 家属
 	dependents depmap
 	// Keep track of the nodes of the graph themselves.
 }
@@ -38,6 +36,7 @@ func New() *Graph {
 	}
 }
 
+// 增加点，并添加边
 func (g *Graph) DependOn(child, parent Node) error {
 	if child.GetID() == parent.GetID() {
 		return errors.New("self-referential dependencies not allowed")
@@ -58,8 +57,17 @@ func (g *Graph) DependOn(child, parent Node) error {
 	return nil
 }
 
-func (g *Graph) CreateNode(inode Node) error {
-	g.nodes[inode.GetID()] = inode
+func addNodeToNodeset(dm depmap, key, node string) {
+	nodes, ok := dm[key]
+	if !ok {
+		nodes = make(map[string]struct{})
+		dm[key] = nodes
+	}
+	nodes[node] = struct{}{}
+}
+
+func (g *Graph) AddNode(node Node) error {
+	g.nodes[node.GetID()] = node
 
 	return nil
 }
@@ -155,9 +163,7 @@ func (g *Graph) TopoSorted() []string {
 
 	allNodes := make([]string, 0, nodeCount)
 	for _, layer := range layers {
-		for _, node := range layer {
-			allNodes = append(allNodes, node)
-		}
+		allNodes = append(allNodes, layer...)
 	}
 
 	return allNodes
@@ -177,14 +183,6 @@ func (g *Graph) Dependents(parent string) map[string]struct{} {
 
 func (g *Graph) immediateDependents(node string) map[string]struct{} {
 	return g.dependents[node]
-}
-
-func (g *Graph) clone() *Graph {
-	return &Graph{
-		dependencies: copyDepmap(g.dependencies),
-		dependents:   copyDepmap(g.dependents),
-		nodes:        copyNodeset(g.nodes),
-	}
 }
 
 // buildTransitive starts at `root` and continues calling `nextFn` to keep discovering more nodes until
@@ -217,6 +215,15 @@ func (g *Graph) buildTransitive(root string, nextFn func(string) map[string]stru
 	return out
 }
 
+func (g *Graph) clone() *Graph {
+	return &Graph{
+		dependencies: copyDepmap(g.dependencies),
+		dependents:   copyDepmap(g.dependents),
+		nodes:        copyNodeset(g.nodes),
+	}
+}
+
+// TODO:如果 Node 为接口类型，此时还能如此 copy 吗？
 func copyNodeset(s nodeset) nodeset {
 	out := make(nodeset, len(s))
 	for k, v := range s {
@@ -237,47 +244,29 @@ func copyDepmap(m depmap) depmap {
 	return out
 }
 
-func addNodeToNodeset(dm depmap, key, node string) {
-	nodes, ok := dm[key]
-	if !ok {
-		nodes = make(map[string]struct{})
-		dm[key] = nodes
-	}
-	nodes[node] = struct{}{}
-}
-
+// 精简图，去掉其中的临时节点，单保留原图
+// 思路: 遍历所有节点，如果节点为临时节点，则就将该节点的上游节点和下游节点连接起来，然后将该节点及其连线删除掉
 func (g *Graph) ShrinkGraph() *Graph {
-
-	// 思路
-	// 遍历所有节点，如果节点属性为 t，则计算该节点的上游有几个
-	// 如果只有一个，则将该节点的上游和其下游若干个节点都连起来，然后将该连线删除掉
-	// 循环遍历
-
-	// Copy the graph
 	shrinkingGraph := g.clone()
-
 	for {
-
-		tnum := 0
+		tempNodeC := 0
+		// TODO:map 遍历，如果写成 for node := 会是什么结果？
 		for _, v := range shrinkingGraph.nodes {
 			if v.IsTemp() {
+				tempNodeC++
+				// 先添加新边
 				for pid := range shrinkingGraph.dependencies[v.GetID()] {
-					pnode := shrinkingGraph.nodes[pid]
-					for id := range shrinkingGraph.dependents[v.GetID()] {
-						shrinkingGraph.DependOn(shrinkingGraph.nodes[id], pnode)
+					for cid := range shrinkingGraph.dependents[v.GetID()] {
+						shrinkingGraph.DependOn(shrinkingGraph.nodes[cid], shrinkingGraph.nodes[pid])
 					}
 				}
-				// 去掉中间点
+				// 再去掉该节点相关信息
 				shrinkingGraph.remove(v.GetID())
-
-				tnum++
 			}
 		}
-
-		if tnum == 0 {
+		if tempNodeC == 0 {
 			break
 		}
 	}
-
 	return shrinkingGraph
 }
