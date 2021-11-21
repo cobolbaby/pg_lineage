@@ -16,21 +16,20 @@ func CreateGraph(driver neo4j.Driver, graph *depgraph.Graph, extends *Op) error 
 	defer session.Close()
 
 	_, err := session.WriteTransaction(func(tx neo4j.Transaction) (interface{}, error) {
-
-		// write one graph struc to Neo4j
-		// 顺序遍历节点及其依赖
-
 		// 创建点
 		for _, v := range graph.GetNodes() {
-			if _, err := CreateNode(tx, v.(*Record)); err != nil {
+			r, _ := v.(*Record)
+			r.Database = graph.GetNamespace()
+			if _, err := CreateNode(tx, r); err != nil {
 				return nil, err
 			}
 		}
 		// 创建线
 		for k, v := range graph.GetRelationships() {
 			for kk := range v {
-				extends.OrigID = k
+				extends.SrcID = k // 不含 namespace
 				extends.DestID = kk
+				extends.Database = graph.GetNamespace()
 				if _, err := CreateEdge(tx, extends); err != nil {
 					return nil, err
 				}
@@ -43,45 +42,24 @@ func CreateGraph(driver neo4j.Driver, graph *depgraph.Graph, extends *Op) error 
 	return err
 }
 
-func deduplicateNodes(nodes []*Record) []*Record {
-	var unique []*Record
-	uniqueMap := make(map[string]int)
-
-	for _, v := range nodes {
-		if v.SchemaName == "" {
-			// TODO:需要定义为 proc 的名称
-			v.SchemaName = ""
-		}
-		v.ID = v.SchemaName + "." + v.RelName
-
-		if _, ok := uniqueMap[v.ID]; !ok {
-			uniqueMap[v.ID] = 1
-			unique = append(unique, v)
-		} else {
-			uniqueMap[v.ID]++
-		}
-	}
-
-	return unique
-}
-
 // 创建图中节点
 func CreateNode(tx neo4j.Transaction, r *Record) (*Record, error) {
 	// 需要将 ID 作为唯一主键
 	// CREATE CONSTRAINT ON (cc:CreditCard) ASSERT cc.number IS UNIQUE
 	// MERGE (n:Table { id:  }) ON CREATE SET n.created = timestamp() ON MATCH SET n.lastAccessed = timestamp() RETURN n.name, n.created, n.lastAccessed
-	// records, err := tx.Run("CREATE (n:Table { id: $id, schema_name: $schema_name, rel_name: $rel_name, type: $type }) RETURN n.id",
 	records, err := tx.Run(`
-		MERGE (n:Table { id: $id }) 
-		ON CREATE SET n.schema_name = $schema_name, n.rel_name = $rel_name, n.type = $type, n.udt = timestamp()
-		ON MATCH SET n.udt = timestamp()
+		MERGE (n:Table {id: $id}) 
+		ON CREATE SET n.database = $database, n.schemaname = $schemaname, n.relname = $relname, n.udt = timestamp(), n.size = $size, n.visited = $visited
+		ON MATCH SET n.udt = timestamp(), n.size = $size, n.visited = $visited
 		RETURN n.id
 	`,
 		map[string]interface{}{
-			"id":          r.ID,
-			"schema_name": r.SchemaName,
-			"rel_name":    r.RelName,
-			"type":        r.Type,
+			"id":         r.Database + "." + r.GetID(),
+			"schemaname": r.SchemaName,
+			"relname":    r.RelName,
+			"database":   r.Database,
+			"size":       r.Size,
+			"visited":    r.Visited,
 		})
 	// In face of driver native errors, make sure to return them directly.
 	// Depending on the error, the driver may try to execute the function again.
@@ -99,5 +77,18 @@ func CreateNode(tx neo4j.Transaction, r *Record) (*Record, error) {
 
 // 创建图中边
 func CreateEdge(tx neo4j.Transaction, r *Op) (*Op, error) {
-	return nil, nil
+	_, err := tx.Run(`
+		MATCH (pnode:Table {id: $pid}), (cnode:Table {id: $cid})
+		CREATE (pnode)-[e:DOWNSTREAM {id: $id, database: $database, schemaname: $schemaname, procname: $procname}]->(cnode)
+		RETURN e
+	`, map[string]interface{}{
+		"id":         r.Database + "." + r.GetID(),
+		"database":   r.Database,
+		"schemaname": r.SchemaName,
+		"procname":   r.ProcName,
+		"pid":        r.Database + "." + r.SrcID,
+		"cid":        r.Database + "." + r.DestID,
+	})
+
+	return nil, err
 }

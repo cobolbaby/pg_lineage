@@ -46,7 +46,7 @@ type Op struct {
 }
 
 func main() {
-	g := depgraph.New()
+	g := depgraph.New("bdc")
 
 	// op1 := &Op{
 	// 	Type:       "plpgsql",

@@ -9,10 +9,11 @@ type Node interface {
 	IsTemp() bool
 }
 
-// 节点集合，为了方便扩展，Node定义为接口类型
+// Node collection
+// considering scalability, Node is defined as an interface type
 type nodeset map[string]Node
 
-// 采用邻接列表的方式存储节点间的依赖关系
+// Dependency between nodes using adjacency list
 type depmap map[string]map[string]struct{}
 
 type Graph struct {
@@ -21,18 +22,21 @@ type Graph struct {
 	// Maintain dependency relationships in both directions. These
 	// data structures are the edges of the graph.
 
-	// `dependencies` tracks child -> parents. 依靠
+	// `dependencies` tracks child -> parents.
 	dependencies depmap
-	// `dependents` tracks parent -> children. 家属
+	// `dependents` tracks parent -> children.
 	dependents depmap
 	// Keep track of the nodes of the graph themselves.
+
+	namespace string
 }
 
-func New() *Graph {
+func New(namespace string) *Graph {
 	return &Graph{
 		dependencies: make(depmap),
 		dependents:   make(depmap),
 		nodes:        make(nodeset),
+		namespace:    namespace,
 	}
 }
 
@@ -44,7 +48,11 @@ func (g *Graph) GetRelationships() depmap {
 	return g.dependents
 }
 
-// 增加点，并添加边
+func (g *Graph) GetNamespace() string {
+	return g.namespace
+}
+
+// Add nodes and relationships
 func (g *Graph) DependOn(child Node, parent Node) error {
 	if child.GetID() == parent.GetID() {
 		return errors.New("self-referential dependencies not allowed")
@@ -126,7 +134,7 @@ func (g *Graph) TopoSortedLayers() [][]string {
 
 		layers = append(layers, leaves)
 		for _, leafNode := range leaves {
-			shrinkingGraph.remove(leafNode)
+			shrinkingGraph.Remove(leafNode)
 		}
 	}
 
@@ -145,7 +153,7 @@ func removeFromDepmap(dm depmap, key, node string) {
 	}
 }
 
-func (g *Graph) remove(node string) {
+func (g *Graph) Remove(node string) {
 	// Remove edges from things that depend on `node`.
 	for dependent := range g.dependents[node] {
 		removeFromDepmap(g.dependencies, dependent, node)
@@ -210,7 +218,7 @@ func (g *Graph) buildTransitive(root string, nextFn func(string) map[string]stru
 		discovered := []string{}
 		for _, node := range searchNext {
 			// For each node to discover, find the next nodes.
-			for nextNode, _ := range nextFn(node) {
+			for nextNode := range nextFn(node) {
 				// If we have not seen the node before, add it to the output as well
 				// as the list of nodes to traverse in the next iteration.
 				if _, ok := out[nextNode]; !ok {
@@ -230,10 +238,11 @@ func (g *Graph) clone() *Graph {
 		dependencies: copyDepmap(g.dependencies),
 		dependents:   copyDepmap(g.dependents),
 		nodes:        copyNodeset(g.nodes),
+		namespace:    g.namespace,
 	}
 }
 
-// TODO:如果 Node 为接口类型，此时还能如此 copy 吗？
+// TODO:If Node is an interface type, can it still be copied like this?
 func copyNodeset(s nodeset) nodeset {
 	out := make(nodeset, len(s))
 	for k, v := range s {
@@ -254,24 +263,24 @@ func copyDepmap(m depmap) depmap {
 	return out
 }
 
-// 精简图，去掉其中的临时节点，单保留原图
-// 思路: 遍历所有节点，如果节点为临时节点，则就将该节点的上游节点和下游节点连接起来，然后将该节点及其连线删除掉
+// Simplify the graph, remove the temporary nodes, but keep the original graph
+// Traverse all nodes, if the node is a temporary node, connect the upstream node and downstream node
+// of the node, and then delete the node and its connection
 func (g *Graph) ShrinkGraph() *Graph {
 	shrinkingGraph := g.clone()
 	for {
 		tempNodeC := 0
-		// TODO:map 遍历，如果写成 for node := 会是什么结果？
 		for _, v := range shrinkingGraph.nodes {
 			if v.IsTemp() {
 				tempNodeC++
-				// 先添加新边
+				// At First, add new edges
 				for pid := range shrinkingGraph.dependencies[v.GetID()] {
 					for cid := range shrinkingGraph.dependents[v.GetID()] {
 						shrinkingGraph.DependOn(shrinkingGraph.nodes[cid], shrinkingGraph.nodes[pid])
 					}
 				}
-				// 再去掉该节点相关信息
-				shrinkingGraph.remove(v.GetID())
+				// Then remove the relevant information of the node
+				shrinkingGraph.Remove(v.GetID())
 			}
 		}
 		if tempNodeC == 0 {

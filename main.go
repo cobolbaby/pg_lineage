@@ -58,29 +58,50 @@ type Record struct {
 }
 
 func (r *Record) GetID() string {
+	if r.ID != "" {
+		return r.ID
+	}
+
 	if r.SchemaName != "" {
 		return r.SchemaName + "." + r.RelName
 	} else {
-		return r.RelName
+		switch r.RelName {
+		case "pg_namespace", "pg_class", "pg_attribute", "pg_type":
+			r.SchemaName = "pg_catalog"
+			return r.SchemaName + "." + r.RelName
+		default:
+			return r.RelName
+		}
 	}
 }
 
 func (r *Record) IsTemp() bool {
 	return r.SchemaName == "" ||
 		strings.HasPrefix(r.RelName, "temp_") ||
-		strings.HasPrefix(r.RelName, "tmp_") ||
-		strings.HasPrefix(r.RelName, "pg_")
+		strings.HasPrefix(r.RelName, "tmp_")
 }
 
 type Op struct {
 	Type       string
 	ProcName   string
 	SchemaName string
+	Database   string
 	Comment    string
 	Owner      *Owner
-	OrigID     string
+	SrcID      string
 	DestID     string
 	ID         string
+}
+
+func (o *Op) GetID() string {
+	if o.ID != "" {
+		return o.ID
+	}
+
+	if o.SchemaName == "" {
+		o.SchemaName = "public"
+	}
+	return o.SchemaName + "." + o.ProcName
 }
 
 // 过滤部分关键词
@@ -101,9 +122,8 @@ func main() {
 		SchemaName: "dm",
 		Comment:    "",
 		Owner:      &Owner{Username: "postgres", Nickname: "postgres", ID: "1"},
-		OrigID:     "",
+		SrcID:      "",
 		DestID:     "",
-		ID:         "dm.func_validate_hpe_mmp_workobjectstatus",
 	}
 
 	// 创建 PG 数据库连接，并执行SQL语句
@@ -156,7 +176,7 @@ func main() {
 
 	for _, v := range gjson.Parse(tree).Array() {
 
-		sqlTree := depgraph.New()
+		sqlTree := depgraph.New("IPT_PG_BDC")
 
 		for _, action := range v.Get("PLpgSQL_function.action.PLpgSQL_stmt_block.body").Array() {
 			// 遍历属性
@@ -176,6 +196,8 @@ func main() {
 			})
 
 		}
+
+		// TODO:完善点的信息
 
 		// log.Printf("%s Parser: %#v\n", key, *sqlTree)
 		if err := CreateGraph(driver, sqlTree.ShrinkGraph(), op); err != nil {
