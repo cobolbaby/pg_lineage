@@ -1,10 +1,12 @@
 package main
 
 import (
+	"github.com/cobolbaby/lineage/depgraph"
+
 	"github.com/neo4j/neo4j-go-driver/v4/neo4j"
 )
 
-func CreateGraph(driver neo4j.Driver, graph *SqlTree) error {
+func CreateGraph(driver neo4j.Driver, graph *depgraph.Graph, extends *Op) error {
 	// Sessions are short-lived, cheap to create and NOT thread safe. Typically create one or more sessions
 	// per request in your web application. Make sure to call Close on the session when done.
 	// For multi-database support, set sessionConfig.DatabaseName to requested database
@@ -19,15 +21,19 @@ func CreateGraph(driver neo4j.Driver, graph *SqlTree) error {
 		// 顺序遍历节点及其依赖
 
 		// 创建点
-		for _, v := range deduplicateNodes(append(graph.Source, graph.Target...)) {
-			if _, err := CreateNode(tx, v); err != nil {
+		for _, v := range graph.GetNodes() {
+			if _, err := CreateNode(tx, v.(*Record)); err != nil {
 				return nil, err
 			}
 		}
 		// 创建线
-		for _, v := range graph.Edge {
-			if _, err := CreateEdge(tx, v); err != nil {
-				return nil, err
+		for k, v := range graph.GetRelationships() {
+			for kk := range v {
+				extends.OrigID = k
+				extends.DestID = kk
+				if _, err := CreateEdge(tx, extends); err != nil {
+					return nil, err
+				}
 			}
 		}
 

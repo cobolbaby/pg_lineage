@@ -3,10 +3,10 @@ package main
 import (
 	"log"
 
+	"github.com/cobolbaby/lineage/depgraph"
+
 	pg_query "github.com/pganalyze/pg_query_go/v2"
 	"github.com/tidwall/gjson"
-
-	"lineage/depgraph"
 )
 
 const (
@@ -60,28 +60,26 @@ func SQLParser(sqlTree *depgraph.Graph, operator, plan string) error {
 						SchemaName: "",
 						Type:       REL_PERSIST_NOT,
 					}
-					sqlTree.CreateNode(tnode)
-					if r := parseFromClause(vv.Get("CommonTableExpr.ctequery.SelectStmt")); r != nil {
-						for _, rr := range r {
-							sqlTree.DependOn(tnode, rr)
-						}
+					sqlTree.AddNode(tnode)
+
+					// 如果存在 FROM 字句，则需要添加依赖关系
+					for _, r := range parseFromClause(vv.Get("CommonTableExpr.ctequery.SelectStmt")) {
+						sqlTree.DependOn(tnode, r)
 					}
 				}
 			}
 			if cvv.Get("into").Exists() {
-
 				tnode := &Record{
 					RelName:    cvv.Get("into.rel.relname").String(),
 					SchemaName: cvv.Get("into.rel.schemaname").String(),
 					Type:       cvv.Get("into.rel.relpersistence").String(),
 				}
-				sqlTree.CreateNode(tnode)
+				sqlTree.AddNode(tnode)
 
+				// 如果存在 FROM 字句，则需要添加依赖关系
 				if cvv.Get("query.SelectStmt.fromClause").Exists() {
-					if r := parseFromClause(cvv.Get("query.SelectStmt")); r != nil {
-						for _, rr := range r {
-							sqlTree.DependOn(tnode, rr)
-						}
+					for _, r := range parseFromClause(cvv.Get("query.SelectStmt")) {
+						sqlTree.DependOn(tnode, r)
 					}
 				}
 			}
@@ -91,19 +89,15 @@ func SQLParser(sqlTree *depgraph.Graph, operator, plan string) error {
 		if v.Get("stmt.CreateStmt").Exists() {
 			vv := v.Get("stmt.CreateStmt")
 			if r := parseRelname(vv); r != nil {
-				sqlTree.CreateNode(r)
+				sqlTree.AddNode(r)
 			}
 		}
 
 		// 如果该 SQL 为 select 操作，则获取 from
 		if v.Get("stmt.SelectStmt").Exists() {
 			vv := v.Get("stmt.SelectStmt")
-
-			if r := parseFromClause(vv); r != nil {
-				for _, rr := range r {
-					sqlTree.CreateNode(rr)
-				}
-
+			for _, r := range parseFromClause(vv) {
+				sqlTree.AddNode(r)
 			}
 		}
 
@@ -111,58 +105,42 @@ func SQLParser(sqlTree *depgraph.Graph, operator, plan string) error {
 		// insert into tbl
 		if v.Get("stmt.InsertStmt").Exists() {
 			vv := v.Get("stmt.InsertStmt")
-			var tnode *Record
+			tnode := parseRelname(vv)
+			sqlTree.AddNode(tnode)
 
-			if tnode = parseRelname(vv); tnode != nil {
-				sqlTree.CreateNode(tnode)
-			}
 			if vv.Get("selectStmt").Exists() {
-				if r := parseFromClause(vv.Get("selectStmt.SelectStmt")); r != nil {
-					for _, rr := range r {
-						sqlTree.DependOn(tnode, rr)
-					}
+				for _, r := range parseFromClause(vv.Get("selectStmt.SelectStmt")) {
+					sqlTree.DependOn(tnode, r)
 				}
 			}
-
 		}
 
 		// update tbl set
 		// update tbl1 set from
 		if v.Get("stmt.UpdateStmt").Exists() {
 			vv := v.Get("stmt.UpdateStmt")
-			var tnode *Record
-
-			if tnode = parseRelname(vv); tnode != nil {
-				sqlTree.CreateNode(tnode)
-			}
+			tnode := parseRelname(vv)
+			sqlTree.AddNode(tnode)
 
 			if vv.Get("fromClause").Exists() {
-				if r := parseFromClause(vv); r != nil {
-					for _, rr := range r {
-						sqlTree.DependOn(tnode, rr)
-					}
+				for _, r := range parseFromClause(vv) {
+					sqlTree.DependOn(tnode, r)
 				}
 			}
-
 		}
 
 		// 如果该 SQL 为 delete 操作，则填充目标节点
 		if v.Get("stmt.DeleteStmt").Exists() {
 			vv := v.Get("stmt.DeleteStmt")
-			var tnode *Record
-			if tnode = parseRelname(vv); tnode != nil {
-				sqlTree.CreateNode(tnode)
-			}
+			tnode := parseRelname(vv)
+			sqlTree.AddNode(tnode)
+
 			if vv.Get("fromClause").Exists() {
-				if r := parseFromClause(vv); r != nil {
-					for _, rr := range r {
-						sqlTree.DependOn(tnode, rr)
-					}
+				for _, r := range parseFromClause(vv) {
+					sqlTree.DependOn(tnode, r)
 				}
 			}
-
 		}
-
 	}
 
 	return nil
@@ -183,11 +161,11 @@ func parseRelname(v gjson.Result) *Record {
 
 // FROM Clause
 func parseFromClause(v gjson.Result) []*Record {
-	if !v.Get("fromClause").Exists() {
-		return nil
-	}
-
 	var records []*Record
+
+	if !v.Get("fromClause").Exists() {
+		return records
+	}
 
 	fromClause := v.Get("fromClause").Array()
 	for _, vv := range fromClause {
@@ -209,7 +187,6 @@ func parseFromClause(v gjson.Result) []*Record {
 	}
 
 	return records
-
 }
 
 // JOIN Clause
