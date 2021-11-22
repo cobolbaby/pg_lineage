@@ -157,9 +157,9 @@ func main() {
 		err := rows.Scan(&nspname, &proname, &definition)
 		switch err {
 		case sql.ErrNoRows:
-			fmt.Println("No rows were returned")
+			log.Println("No rows were returned")
 		case nil:
-			fmt.Printf("Query Data = (%s, %s)\n", nspname, proname)
+			log.Printf("Query Data = (%s, %s)\n", nspname, proname)
 		default:
 			log.Fatalln("rows.Scan err: ", err)
 		}
@@ -175,7 +175,7 @@ func main() {
 	}
 
 	for _, v := range gjson.Parse(tree).Array() {
-
+		// TODO:根据 url 获取 db 别名
 		sqlTree := depgraph.New("IPT_PG_BDC")
 
 		for _, action := range v.Get("PLpgSQL_function.action.PLpgSQL_stmt_block.body").Array() {
@@ -198,6 +198,10 @@ func main() {
 		}
 
 		// TODO:完善点的信息
+
+		for i, layer := range sqlTree.TopoSortedLayers() {
+			log.Printf("Graph %d: %s\n", i, strings.Join(layer, ", "))
+		}
 
 		// log.Printf("%s Parser: %#v\n", key, *sqlTree)
 		if err := CreateGraph(driver, sqlTree.ShrinkGraph(), op); err != nil {

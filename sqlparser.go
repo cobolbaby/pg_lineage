@@ -35,7 +35,7 @@ func SQLParser(sqlTree *depgraph.Graph, operator, plan string) error {
 	if err != nil {
 		return err
 	}
-	log.Printf("%s: %s\n", subQuery, subTree)
+	// log.Printf("%s: %s\n", subQuery, subTree)
 
 	stmts := gjson.Get(subTree, "stmts").Array()
 	for _, v := range stmts {

@@ -1,6 +1,9 @@
 package main
 
 import (
+	"log"
+	"strings"
+
 	"github.com/cobolbaby/lineage/depgraph"
 
 	"github.com/neo4j/neo4j-go-driver/v4/neo4j"
@@ -14,6 +17,10 @@ func CreateGraph(driver neo4j.Driver, graph *depgraph.Graph, extends *Op) error 
 	// read mode.
 	session := driver.NewSession(neo4j.SessionConfig{})
 	defer session.Close()
+
+	for i, layer := range graph.TopoSortedLayers() {
+		log.Printf("ShrinkGraph %d: %s\n", i, strings.Join(layer, ", "))
+	}
 
 	_, err := session.WriteTransaction(func(tx neo4j.Transaction) (interface{}, error) {
 		// 创建点
