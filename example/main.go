@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/cobolbaby/lineage/depgraph"
+
+	"github.com/mitchellh/copystructure"
 )
 
 type Record struct {
@@ -37,24 +39,8 @@ func (r *Record) IsTemp() bool {
 		r.SchemaName == ""
 }
 
-type Op struct {
-	Type       string
-	ProcName   string
-	SchemaName string
-	Comment    string
-	ID         string
-}
-
 func main() {
 	g := depgraph.New("bdc")
-
-	// op1 := &Op{
-	// 	Type:       "plpgsql",
-	// 	ProcName:   "func_insert_t1",
-	// 	SchemaName: "dw",
-	// 	Comment:    "create table t1",
-	// 	ID:         "dw.func_insert_t1",
-	// }
 
 	r1 := &Record{
 		SchemaName: "public",
@@ -106,6 +92,7 @@ func main() {
 	g.DependOn(r6, r5)
 	g.DependOn(r7, r5)
 
+	// 拓扑排序
 	for i, layer := range g.ShrinkGraph().TopoSortedLayers() {
 		fmt.Printf("%d: %s\n", i, strings.Join(layer, ", "))
 	}
@@ -113,4 +100,56 @@ func main() {
 	// 0: public.test_table, public.test_table2
 	// 1: dw.test_table5
 	// 2: dw.test_table6, dw.test_table7
+
+	// 深，浅拷贝
+	src1 := g.GetNodes()
+	dst11 := deepCopyWithPointer(src1)
+	dst12 := deepCopyWithPointer2(src1)
+	fmt.Printf("deepCopyWithPointer GetNodes, src1: %+v, dst11: %+v, dst12: %+v\n", src1, dst11, dst12)
+
+	src2 := g.GetRelationships()
+	dst21 := deepCopyWithStruc(src2)
+	dst22 := deepCopyWithStruc2(src2)
+	fmt.Printf("deepCopyWithStruc GetRelationships, src2: %+v, dst21: %+v, dst22: %+v\n", src2, dst21, dst22)
+
+	gc, err := copystructure.Copy(g)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("copystructure.Copy(g), g: %+v, gc: %+v\n", g, gc.(*depgraph.Graph))
+	gc2 := new(depgraph.Graph)
+	*gc2 = *g
+	fmt.Printf("new(depgraph.Graph) *gc2 = *g, g: %+v, gc: %+v\n", g, gc2)
+}
+
+// 如果 depgraph.Node 为指针，以下方法无法做到深拷贝
+func deepCopyWithPointer(src map[string]depgraph.Node) map[string]depgraph.Node {
+	dst := make(map[string]depgraph.Node)
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
+}
+
+// 如果 depgraph.Node 为指针，以下方法无法做到深拷贝
+func deepCopyWithPointer2(src map[string]depgraph.Node) map[string]depgraph.Node {
+	dst, _ := copystructure.Copy(src)
+	return dst.(map[string]depgraph.Node)
+}
+
+func deepCopyWithStruc(src map[string]map[string]struct{}) map[string]map[string]struct{} {
+	dst := make(map[string]map[string]struct{})
+	for k, v := range src {
+		tt := make(map[string]struct{}, len(v))
+		for kk, vv := range v {
+			tt[kk] = vv
+		}
+		dst[k] = tt
+	}
+	return dst
+}
+
+func deepCopyWithStruc2(src map[string]map[string]struct{}) map[string]map[string]struct{} {
+	dst, _ := copystructure.Copy(src)
+	return dst.(map[string]map[string]struct{})
 }
