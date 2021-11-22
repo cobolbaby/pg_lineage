@@ -134,12 +134,13 @@ func deepCopyWithPointer(src map[string]depgraph.Node) map[string]depgraph.Node 
 	return dst
 }
 
-// 如果 depgraph.Node 为指针，以下方法无法做到深拷贝
+// 如果 depgraph.Node 为指针，以下方法可以做到深拷贝
 func deepCopyWithPointer2(src map[string]depgraph.Node) map[string]depgraph.Node {
 	dst, _ := copystructure.Copy(src)
 	return dst.(map[string]depgraph.Node)
 }
 
+// 可以做到深拷贝，主要原因是在与 struct{} 为非指针类型
 func deepCopyWithStruc(src map[string]map[string]struct{}) map[string]map[string]struct{} {
 	dst := make(map[string]map[string]struct{})
 	for k, v := range src {
