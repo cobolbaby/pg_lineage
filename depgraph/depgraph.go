@@ -2,6 +2,8 @@ package depgraph
 
 import (
 	"errors"
+
+	"github.com/mitchellh/copystructure"
 )
 
 type Node interface {
@@ -242,25 +244,14 @@ func (g *Graph) clone() *Graph {
 	}
 }
 
-// TODO:If Node is an interface type, can it still be copied like this?
 func copyNodeset(s nodeset) nodeset {
-	out := make(nodeset, len(s))
-	for k, v := range s {
-		out[k] = v
-	}
-	return out
+	dst, _ := copystructure.Copy(s)
+	return dst.(nodeset)
 }
 
 func copyDepmap(m depmap) depmap {
-	out := make(depmap, len(m))
-	for k, v := range m {
-		tt := make(map[string]struct{}, len(v))
-		for kk, vv := range v {
-			tt[kk] = vv
-		}
-		out[k] = tt
-	}
-	return out
+	dst, _ := copystructure.Copy(m)
+	return dst.(depmap)
 }
 
 // Simplify the graph, remove the temporary nodes, but keep the original graph

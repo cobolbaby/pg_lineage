@@ -102,16 +102,19 @@ func main() {
 	// 2: dw.test_table6, dw.test_table7
 
 	// 深，浅拷贝
+	// map[string]depgraph.Node
 	src1 := g.GetNodes()
 	dst11 := deepCopyWithPointer(src1)
 	dst12 := deepCopyWithPointer2(src1)
 	fmt.Printf("deepCopyWithPointer GetNodes, src1: %+v, dst11: %+v, dst12: %+v\n", src1, dst11, dst12)
 
+	// map[string]map[string]struct{}
 	src2 := g.GetRelationships()
 	dst21 := deepCopyWithStruc(src2)
 	dst22 := deepCopyWithStruc2(src2)
 	fmt.Printf("deepCopyWithStruc GetRelationships, src2: %+v, dst21: %+v, dst22: %+v\n", src2, dst21, dst22)
 
+	// &Graph{}
 	gc, err := copystructure.Copy(g)
 	if err != nil {
 		panic(err)
