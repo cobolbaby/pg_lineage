@@ -2,6 +2,7 @@ package depgraph
 
 import (
 	"errors"
+	"log"
 
 	"github.com/mitchellh/copystructure"
 )
@@ -61,6 +62,7 @@ func (g *Graph) DependOn(child Node, parent Node) error {
 	}
 
 	if g.DependsOn(parent.GetID(), child.GetID()) {
+		log.Printf("[WARN] Dependency %s -> %s already exists", child.GetID(), parent.GetID())
 		return errors.New("circular dependencies not allowed")
 	}
 

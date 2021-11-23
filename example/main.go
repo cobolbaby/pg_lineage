@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"github.com/cobolbaby/lineage/depgraph"
-
 	"github.com/mitchellh/copystructure"
+	pg_query "github.com/pganalyze/pg_query_go/v2"
 )
 
 type Record struct {
@@ -105,13 +105,13 @@ func main() {
 	// map[string]depgraph.Node
 	src1 := g.GetNodes()
 	dst11 := deepCopyWithPointer(src1)
-	dst12 := deepCopyWithPointer2(src1)
+	dst12 := deepCopyWithPointerV2(src1)
 	fmt.Printf("deepCopyWithPointer GetNodes, src1: %+v, dst11: %+v, dst12: %+v\n", src1, dst11, dst12)
 
 	// map[string]map[string]struct{}
 	src2 := g.GetRelationships()
 	dst21 := deepCopyWithStruc(src2)
-	dst22 := deepCopyWithStruc2(src2)
+	dst22 := deepCopyWithStrucV2(src2)
 	fmt.Printf("deepCopyWithStruc GetRelationships, src2: %+v, dst21: %+v, dst22: %+v\n", src2, dst21, dst22)
 
 	// &Graph{}
@@ -123,6 +123,20 @@ func main() {
 	gc2 := new(depgraph.Graph)
 	*gc2 = *g
 	fmt.Printf("new(depgraph.Graph) *gc2 = *g, g: %+v, gc: %+v\n", g, gc2)
+
+	// 验证 常规 sql 解析结果
+	dml1 := `
+		CREATE TABLE tbl2 as
+		SELECT * FROM tbl1;
+	`
+	tree, _ := pg_query.ParseToJSON(dml1)
+	fmt.Printf("%s\n", tree)
+
+	dml2 := `
+		select * from dw.func_insert_test_table();
+	`
+	tree, _ = pg_query.ParseToJSON(dml2)
+	fmt.Printf("%s\n", tree)
 }
 
 // 如果 depgraph.Node 为指针，以下方法无法做到深拷贝
@@ -135,7 +149,7 @@ func deepCopyWithPointer(src map[string]depgraph.Node) map[string]depgraph.Node 
 }
 
 // 如果 depgraph.Node 为指针，以下方法可以做到深拷贝
-func deepCopyWithPointer2(src map[string]depgraph.Node) map[string]depgraph.Node {
+func deepCopyWithPointerV2(src map[string]depgraph.Node) map[string]depgraph.Node {
 	dst, _ := copystructure.Copy(src)
 	return dst.(map[string]depgraph.Node)
 }
@@ -153,7 +167,7 @@ func deepCopyWithStruc(src map[string]map[string]struct{}) map[string]map[string
 	return dst
 }
 
-func deepCopyWithStruc2(src map[string]map[string]struct{}) map[string]map[string]struct{} {
+func deepCopyWithStrucV2(src map[string]map[string]struct{}) map[string]map[string]struct{} {
 	dst, _ := copystructure.Copy(src)
 	return dst.(map[string]map[string]struct{})
 }
