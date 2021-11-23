@@ -1,10 +1,11 @@
 package main
 
 import (
+
+	// "github.com/cobolbaby/lineage/depgraph"
 	"log"
 
 	"github.com/cobolbaby/lineage/depgraph"
-
 	pg_query "github.com/pganalyze/pg_query_go/v2"
 	"github.com/tidwall/gjson"
 )
@@ -123,6 +124,8 @@ func SQLParser(sqlTree *depgraph.Graph, operator, plan string) error {
 				}
 			}
 
+			// TODO:根据 with 所在位置不同，需要定义不同的解析规则
+
 			tnode := parseRelname(ivv)
 			sqlTree.AddNode(tnode)
 
@@ -163,6 +166,11 @@ func SQLParser(sqlTree *depgraph.Graph, operator, plan string) error {
 	}
 
 	return nil
+}
+
+// TODO:UNION ALL 解析
+func parserUnionClause() {
+	//
 }
 
 // INSERT / UPDATE / DELETE / CREATE TABLE 简单操作

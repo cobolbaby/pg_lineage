@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/cobolbaby/lineage/depgraph"
-
 	"github.com/neo4j/neo4j-go-driver/v4/neo4j"
 )
 
@@ -18,6 +17,7 @@ func CreateGraph(driver neo4j.Driver, graph *depgraph.Graph, extends *Op) error 
 	session := driver.NewSession(neo4j.SessionConfig{})
 	defer session.Close()
 
+	log.Printf("sqlTree.ShrinkGraph: %+v", graph)
 	for i, layer := range graph.TopoSortedLayers() {
 		log.Printf("ShrinkGraph %d: %s\n", i, strings.Join(layer, ", "))
 	}
