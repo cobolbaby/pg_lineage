@@ -15,7 +15,7 @@ const (
 )
 
 func SQLParser(sqlTree *depgraph.Graph, operator, plan string) error {
-	log.Printf("%s: %s\n", operator, plan)
+	// log.Printf("%s: %s\n", operator, plan)
 
 	var subTree string
 	var subQuery string
@@ -35,7 +35,7 @@ func SQLParser(sqlTree *depgraph.Graph, operator, plan string) error {
 	if err != nil {
 		return err
 	}
-	// log.Printf("%s: %s\n", subQuery, subTree)
+	log.Printf("%s: %s\n", subQuery, subTree)
 
 	stmts := gjson.Get(subTree, "stmts").Array()
 	for _, v := range stmts {
@@ -49,7 +49,7 @@ func SQLParser(sqlTree *depgraph.Graph, operator, plan string) error {
 			break
 		}
 
-		// create table as 操作
+		// create table ... as 操作
 		if v.Get("stmt.CreateTableAsStmt").Exists() {
 			cvv := v.Get("stmt.CreateTableAsStmt")
 			if cvv.Get("query.SelectStmt.withClause").Exists() {
@@ -101,22 +101,41 @@ func SQLParser(sqlTree *depgraph.Graph, operator, plan string) error {
 			}
 		}
 
-		// insert into tbl select * from
-		// insert into tbl
+		// insert into tbl ... select * from ...
+		// insert into tbl ...
+		// with ... insert into tbl ... select * from ...
 		if v.Get("stmt.InsertStmt").Exists() {
-			vv := v.Get("stmt.InsertStmt")
-			tnode := parseRelname(vv)
+			ivv := v.Get("stmt.InsertStmt")
+			if ivv.Get("withClause").Exists() {
+				ctes := ivv.Get("withClause.ctes").Array()
+				for _, vv := range ctes {
+					tnode := &Record{
+						RelName:    vv.Get("CommonTableExpr.ctename").String(),
+						SchemaName: "",
+						Type:       REL_PERSIST_NOT,
+					}
+					sqlTree.AddNode(tnode)
+
+					// 如果存在 FROM 字句，则需要添加依赖关系
+					for _, r := range parseFromClause(vv.Get("CommonTableExpr.ctequery.SelectStmt")) {
+						sqlTree.DependOn(tnode, r)
+					}
+				}
+			}
+
+			tnode := parseRelname(ivv)
 			sqlTree.AddNode(tnode)
 
-			if vv.Get("selectStmt").Exists() {
-				for _, r := range parseFromClause(vv.Get("selectStmt.SelectStmt")) {
+			if ivv.Get("selectStmt").Exists() {
+				for _, r := range parseFromClause(ivv.Get("selectStmt.SelectStmt")) {
 					sqlTree.DependOn(tnode, r)
 				}
 			}
 		}
 
-		// update tbl set
-		// update tbl1 set from
+		// update tbl set ...
+		// update tbl set ... from tbl2
+		// update tbl set ... from (select * from tbl2) tbl3 where ...
 		if v.Get("stmt.UpdateStmt").Exists() {
 			vv := v.Get("stmt.UpdateStmt")
 			tnode := parseRelname(vv)
@@ -179,6 +198,14 @@ func parseFromClause(v gjson.Result) []*Record {
 			})
 		}
 
+		// 子查询
+		if vv.Get("RangeSubselect").Exists() {
+			if r := parseFromClause(vv.Get("RangeSubselect.subquery.SelectStmt")); r != nil {
+				records = append(records, r...)
+			}
+		}
+
+		// 关联查询
 		if vv.Get("JoinExpr").Exists() {
 			if r := parseJoinClause(vv); r != nil {
 				records = append(records, r...)
