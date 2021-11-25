@@ -3,6 +3,8 @@ package main
 import (
 
 	// "github.com/cobolbaby/lineage/depgraph"
+
+	"errors"
 	"log"
 
 	"github.com/cobolbaby/lineage/depgraph"
@@ -53,33 +55,23 @@ func SQLParser(sqlTree *depgraph.Graph, operator, plan string) error {
 		// create table ... as 操作
 		if v.Get("stmt.CreateTableAsStmt").Exists() {
 			cvv := v.Get("stmt.CreateTableAsStmt")
-			if cvv.Get("query.SelectStmt.withClause").Exists() {
-				ctes := cvv.Get("query.SelectStmt.withClause.ctes").Array()
-				for _, vv := range ctes {
-					tnode := &Record{
-						RelName:    vv.Get("CommonTableExpr.ctename").String(),
-						SchemaName: "",
-						Type:       REL_PERSIST_NOT,
-					}
-					sqlTree.AddNode(tnode)
 
-					// 如果存在 FROM 字句，则需要添加依赖关系
-					for _, r := range parseFromClause(vv.Get("CommonTableExpr.ctequery.SelectStmt")) {
-						sqlTree.DependOn(tnode, r)
-					}
-				}
+			tnode := &Record{
+				RelName:    cvv.Get("into.rel.relname").String(),
+				SchemaName: cvv.Get("into.rel.schemaname").String(),
+				Type:       cvv.Get("into.rel.relpersistence").String(),
 			}
-			if cvv.Get("into").Exists() {
-				tnode := &Record{
-					RelName:    cvv.Get("into.rel.relname").String(),
-					SchemaName: cvv.Get("into.rel.schemaname").String(),
-					Type:       cvv.Get("into.rel.relpersistence").String(),
-				}
-				sqlTree.AddNode(tnode)
+			sqlTree.AddNode(tnode)
 
-				// 如果存在 FROM 字句，则需要添加依赖关系
-				if cvv.Get("query.SelectStmt.fromClause").Exists() {
-					for _, r := range parseFromClause(cvv.Get("query.SelectStmt")) {
+			if cvv.Get("query.SelectStmt").Exists() {
+				vv := cvv.Get("query.SelectStmt")
+
+				if vv.Get("withClause").Exists() {
+					parseWithClause(vv, sqlTree)
+				}
+
+				if vv.Get("fromClause").Exists() {
+					for _, r := range parseFromClause(vv) {
 						sqlTree.DependOn(tnode, r)
 					}
 				}
@@ -102,36 +94,30 @@ func SQLParser(sqlTree *depgraph.Graph, operator, plan string) error {
 			}
 		}
 
-		// insert into tbl ... select * from ...
 		// insert into tbl ...
+		// insert into tbl ... select * from ...
 		// with ... insert into tbl ... select * from ...
+		// insert into tbl ... with ... select * from ...
 		if v.Get("stmt.InsertStmt").Exists() {
 			ivv := v.Get("stmt.InsertStmt")
 			if ivv.Get("withClause").Exists() {
-				ctes := ivv.Get("withClause.ctes").Array()
-				for _, vv := range ctes {
-					tnode := &Record{
-						RelName:    vv.Get("CommonTableExpr.ctename").String(),
-						SchemaName: "",
-						Type:       REL_PERSIST_NOT,
-					}
-					sqlTree.AddNode(tnode)
-
-					// 如果存在 FROM 字句，则需要添加依赖关系
-					for _, r := range parseFromClause(vv.Get("CommonTableExpr.ctequery.SelectStmt")) {
-						sqlTree.DependOn(tnode, r)
-					}
-				}
+				parseWithClause(ivv, sqlTree)
 			}
-
-			// TODO:根据 with 所在位置不同，需要定义不同的解析规则
 
 			tnode := parseRelname(ivv)
 			sqlTree.AddNode(tnode)
 
-			if ivv.Get("selectStmt").Exists() {
-				for _, r := range parseFromClause(ivv.Get("selectStmt.SelectStmt")) {
-					sqlTree.DependOn(tnode, r)
+			if ivv.Get("selectStmt.SelectStmt").Exists() {
+				vv := ivv.Get("selectStmt.SelectStmt")
+				// 如果有 with ，则先处理
+				if vv.Get("withClause").Exists() {
+					parseWithClause(vv, sqlTree)
+				}
+
+				if vv.Get("fromClause").Exists() {
+					for _, r := range parseFromClause(vv) {
+						sqlTree.DependOn(tnode, r)
+					}
 				}
 			}
 		}
@@ -168,11 +154,6 @@ func SQLParser(sqlTree *depgraph.Graph, operator, plan string) error {
 	return nil
 }
 
-// TODO:UNION ALL 解析
-func parserUnionClause() {
-	//
-}
-
 // INSERT / UPDATE / DELETE / CREATE TABLE 简单操作
 func parseRelname(v gjson.Result) *Record {
 	if !v.Get("relation").Exists() {
@@ -186,8 +167,55 @@ func parseRelname(v gjson.Result) *Record {
 	}
 }
 
+// CTE 子句
+func parseWithClause(v gjson.Result, sqlTree *depgraph.Graph) error {
+
+	if !v.Get("withClause").Exists() {
+		return errors.New("withClause not exists")
+	}
+
+	ctes := v.Get("withClause.ctes").Array()
+	for _, vv := range ctes {
+		tnode := &Record{
+			RelName:    vv.Get("CommonTableExpr.ctename").String(),
+			SchemaName: "",
+			Type:       REL_PERSIST_NOT,
+		}
+		sqlTree.AddNode(tnode)
+
+		// 如果存在 FROM 字句，则需要添加依赖关系
+		for _, r := range parseFromClause(vv.Get("CommonTableExpr.ctequery.SelectStmt")) {
+			sqlTree.DependOn(tnode, r)
+		}
+	}
+
+	return nil
+}
+
+// UNION 解析
+func parserUnionClause(v gjson.Result) []*Record {
+	var records []*Record
+
+	if v.Get("op").String() != "SETOP_UNION" {
+		return records
+	}
+
+	if r := parseFromClause(v.Get("larg")); r != nil {
+		records = append(records, r...)
+	}
+	if r := parseFromClause(v.Get("rarg")); r != nil {
+		records = append(records, r...)
+	}
+	return records
+}
+
 // FROM Clause
 func parseFromClause(v gjson.Result) []*Record {
+	// 如果遇到 UNION，则调用 parserUnionClause 方法
+	if v.Get("op").String() == "SETOP_UNION" {
+		return parserUnionClause(v)
+	}
+
 	var records []*Record
 
 	if !v.Get("fromClause").Exists() {
@@ -226,11 +254,11 @@ func parseFromClause(v gjson.Result) []*Record {
 
 // JOIN Clause
 func parseJoinClause(v gjson.Result) []*Record {
-	if !v.Get("JoinExpr").Exists() {
-		return nil
-	}
-
 	var records []*Record
+
+	if !v.Get("JoinExpr").Exists() {
+		return records
+	}
 
 	lvv := v.Get("JoinExpr.larg")
 	rvv := v.Get("JoinExpr.rarg")
