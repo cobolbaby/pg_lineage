@@ -63,7 +63,8 @@ func (g *Graph) DependOn(child Node, parent Node) error {
 
 	if g.DependsOn(parent.GetID(), child.GetID()) {
 		log.Printf("[WARN] Dependency %s -> %s already exists", child.GetID(), parent.GetID())
-		return errors.New("circular dependencies not allowed")
+		// If there is a circular dependency among several nodes, it will not be processed for now, just recording.
+		// return errors.New("circular dependencies not allowed")
 	}
 
 	// Add nodes and edges
@@ -140,6 +141,11 @@ func (g *Graph) TopoSortedLayers() [][]string {
 		for _, leafNode := range leaves {
 			shrinkingGraph.Remove(leafNode)
 		}
+	}
+
+	// If there is a circular dependency among several nodes, it will not be processed for now, just recording.
+	if len(shrinkingGraph.nodes) > 0 {
+		log.Printf("[WARN] Graph contains cycles: %+v", shrinkingGraph.nodes)
 	}
 
 	return layers
