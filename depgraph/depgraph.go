@@ -261,24 +261,22 @@ func copyDepmap(m depmap) depmap {
 // of the node, and then delete the node and its connection
 func (g *Graph) ShrinkGraph() *Graph {
 	shrinkingGraph := g.clone()
-	for {
-		tempNodeC := 0
-		for _, v := range shrinkingGraph.nodes {
-			if v.IsTemp() {
-				tempNodeC++
-				// At First, add new edges
-				for pid := range shrinkingGraph.dependencies[v.GetID()] {
-					for cid := range shrinkingGraph.dependents[v.GetID()] {
-						shrinkingGraph.DependOn(shrinkingGraph.nodes[cid], shrinkingGraph.nodes[pid])
-					}
+
+	for _, v := range shrinkingGraph.nodes {
+		if v.IsTemp() {
+			// At First, add new edges
+			for pid := range shrinkingGraph.dependencies[v.GetID()] {
+				for cid := range shrinkingGraph.dependents[v.GetID()] {
+					shrinkingGraph.DependOn(shrinkingGraph.nodes[cid], shrinkingGraph.nodes[pid])
 				}
-				// Then remove the relevant information of the node
+			}
+			// Then remove the relevant information of the node
+			// But if the outdegree of the node is 0, it cannot be deleted
+			if len(shrinkingGraph.dependents[v.GetID()]) > 0 {
 				shrinkingGraph.Remove(v.GetID())
 			}
 		}
-		if tempNodeC == 0 {
-			break
-		}
 	}
+
 	return shrinkingGraph
 }
