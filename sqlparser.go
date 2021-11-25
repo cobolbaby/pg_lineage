@@ -5,7 +5,6 @@ import (
 	// "github.com/cobolbaby/lineage/depgraph"
 
 	"errors"
-	"log"
 
 	"github.com/cobolbaby/lineage/depgraph"
 	pg_query "github.com/pganalyze/pg_query_go/v2"
@@ -44,21 +43,16 @@ func SQLParser(sqlTree *depgraph.Graph, operator, plan string) error {
 	if err != nil {
 		return err
 	}
-	log.Printf("%s: %s\n", subQuery, subTree)
+	// log.Printf("%s: %s\n", subQuery, subTree)
 
 	stmts := gjson.Get(subTree, "stmts").Array()
 	for _, v := range stmts {
 
-		// 跳过 analyze 语句
-		if v.Get("stmt.VacuumStmt").Exists() {
-			break
-		}
-		// 跳过 drop table 语句
-		if v.Get("stmt.DropStmt").Exists() {
-			break
-		}
-		// 跳过 create index 语句
-		if v.Get("stmt.IndexStmt").Exists() {
+		// 跳过 analyze/drop/truncate/create index 语句
+		if v.Get("stmt.VacuumStmt").Exists() ||
+			v.Get("stmt.DropStmt").Exists() ||
+			v.Get("stmt.TruncateStmt").Exists() ||
+			v.Get("stmt.IndexStmt").Exists() {
 			break
 		}
 
@@ -105,9 +99,10 @@ func SQLParser(sqlTree *depgraph.Graph, operator, plan string) error {
 		// insert into tbl ...
 		// insert into tbl ... select * from ...
 		// with ... insert into tbl ... select * from ...
-		// insert into tbl ... with ... select * from ...
+		// insert into tbl with ... select * from ...
 		if v.Get("stmt.InsertStmt").Exists() {
 			ivv := v.Get("stmt.InsertStmt")
+
 			if ivv.Get("withClause").Exists() {
 				parseWithClause(ivv, sqlTree)
 			}
@@ -117,7 +112,7 @@ func SQLParser(sqlTree *depgraph.Graph, operator, plan string) error {
 
 			if ivv.Get("selectStmt.SelectStmt").Exists() {
 				vv := ivv.Get("selectStmt.SelectStmt")
-				// 如果有 with ，则先处理
+
 				if vv.Get("withClause").Exists() {
 					parseWithClause(vv, sqlTree)
 				}
@@ -144,17 +139,14 @@ func SQLParser(sqlTree *depgraph.Graph, operator, plan string) error {
 		}
 
 		// 如果该 SQL 为 delete 操作，则填充目标节点
+		// delete from tbl where ...
+		// delete from tbl using tbl2 where ...
 		if v.Get("stmt.DeleteStmt").Exists() {
 			vv := v.Get("stmt.DeleteStmt")
 			tnode := parseRelname(vv)
 			sqlTree.AddNode(tnode)
 
-			if vv.Get("fromClause").Exists() {
-				for _, r := range parseFromClause(vv) {
-					sqlTree.DependOn(tnode, r)
-				}
-			}
-
+			// 关联删除，依赖 using 关键词
 			if vv.Get("usingClause").Exists() {
 				for _, r := range parseUsingClause(vv) {
 					sqlTree.DependOn(tnode, r)
