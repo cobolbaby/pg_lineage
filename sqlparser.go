@@ -27,6 +27,12 @@ func SQLParser(sqlTree *depgraph.Graph, operator, plan string) error {
 	switch operator {
 	case "PLpgSQL_stmt_execsql":
 		subQuery = gjson.Get(plan, "sqlstmt.PLpgSQL_expr.query").String()
+
+		// 跳过不必要的SQL，没啥解析的价值
+		if subQuery == "select clock_timestamp()" {
+			return nil
+		}
+
 		subTree, err = pg_query.ParseToJSON(subQuery)
 
 	case "PLpgSQL_stmt_dynexecute":
@@ -51,6 +57,10 @@ func SQLParser(sqlTree *depgraph.Graph, operator, plan string) error {
 		if v.Get("stmt.DropStmt").Exists() {
 			break
 		}
+		// 跳过 create index 语句
+		if v.Get("stmt.IndexStmt").Exists() {
+			break
+		}
 
 		// create table ... as 操作
 		if v.Get("stmt.CreateTableAsStmt").Exists() {
@@ -70,10 +80,8 @@ func SQLParser(sqlTree *depgraph.Graph, operator, plan string) error {
 					parseWithClause(vv, sqlTree)
 				}
 
-				if vv.Get("fromClause").Exists() {
-					for _, r := range parseFromClause(vv) {
-						sqlTree.DependOn(tnode, r)
-					}
+				for _, r := range parseFromClause(vv) {
+					sqlTree.DependOn(tnode, r)
 				}
 			}
 		}
@@ -114,10 +122,8 @@ func SQLParser(sqlTree *depgraph.Graph, operator, plan string) error {
 					parseWithClause(vv, sqlTree)
 				}
 
-				if vv.Get("fromClause").Exists() {
-					for _, r := range parseFromClause(vv) {
-						sqlTree.DependOn(tnode, r)
-					}
+				for _, r := range parseFromClause(vv) {
+					sqlTree.DependOn(tnode, r)
 				}
 			}
 		}
@@ -148,10 +154,39 @@ func SQLParser(sqlTree *depgraph.Graph, operator, plan string) error {
 					sqlTree.DependOn(tnode, r)
 				}
 			}
+
+			if vv.Get("usingClause").Exists() {
+				for _, r := range parseUsingClause(vv) {
+					sqlTree.DependOn(tnode, r)
+				}
+			}
 		}
 	}
 
 	return nil
+}
+
+func parseUsingClause(v gjson.Result) []*Record {
+	var records []*Record
+
+	if !v.Get("usingClause").Exists() {
+		return records
+	}
+
+	usingClause := v.Get("usingClause").Array()
+	for _, vv := range usingClause {
+
+		// 只有一个表
+		if vv.Get("RangeVar").Exists() {
+			records = append(records, &Record{
+				RelName:    vv.Get("RangeVar.relname").String(),
+				SchemaName: vv.Get("RangeVar.schemaname").String(),
+				Type:       vv.Get("RangeVar.relpersistence").String(),
+			})
+		}
+
+	}
+	return records
 }
 
 // INSERT / UPDATE / DELETE / CREATE TABLE 简单操作
