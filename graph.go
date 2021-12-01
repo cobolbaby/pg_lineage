@@ -8,6 +8,22 @@ import (
 	"github.com/neo4j/neo4j-go-driver/v4/neo4j"
 )
 
+func ResetGraph(driver neo4j.Driver) error {
+	// Sessions are short-lived, cheap to create and NOT thread safe. Typically create one or more sessions
+	// per request in your web application. Make sure to call Close on the session when done.
+	// For multi-database support, set sessionConfig.DatabaseName to requested database
+	// Session config will default to write mode, if only reads are to be used configure session for
+	// read mode.
+	session := driver.NewSession(neo4j.SessionConfig{})
+	defer session.Close()
+
+	_, err := session.WriteTransaction(func(tx neo4j.Transaction) (interface{}, error) {
+		return tx.Run("MATCH (n) DETACH DELETE n", nil)
+	})
+
+	return err
+}
+
 func CreateGraph(driver neo4j.Driver, graph *depgraph.Graph, extends *Op) error {
 	// Sessions are short-lived, cheap to create and NOT thread safe. Typically create one or more sessions
 	// per request in your web application. Make sure to call Close on the session when done.
@@ -49,13 +65,17 @@ func CreateGraph(driver neo4j.Driver, graph *depgraph.Graph, extends *Op) error 
 	return err
 }
 
+// 针对 Neo4j 建模，暂定的建模方案：
+// 1. 点的 Label 最好是业务分类，但这得在元数据管理系统完备之后，前期先按照 Schema 做拆解
+// 2. 线之前定义为了 UDF / Flink Job，但有一定的局限性，考虑将 UDF 转化为点保存
+// 3. 对现有服务的改造，就时重写下面两个方法
+
 // 创建图中节点
 func CreateNode(tx neo4j.Transaction, r *Record) (*Record, error) {
 	// 需要将 ID 作为唯一主键
 	// CREATE CONSTRAINT ON (cc:CreditCard) ASSERT cc.number IS UNIQUE
-	// MERGE (n:Table { id:  }) ON CREATE SET n.created = timestamp() ON MATCH SET n.lastAccessed = timestamp() RETURN n.name, n.created, n.lastAccessed
 	records, err := tx.Run(`
-		MERGE (n:Table {id: $id}) 
+		MERGE (n:`+r.SchemaName+` {id: $id}) 
 		ON CREATE SET n.database = $database, n.schemaname = $schemaname, n.relname = $relname, n.udt = timestamp(), n.size = $size, n.visited = $visited
 		ON MATCH SET n.udt = timestamp(), n.size = $size, n.visited = $visited
 		RETURN n.id
@@ -85,7 +105,7 @@ func CreateNode(tx neo4j.Transaction, r *Record) (*Record, error) {
 // 创建图中边
 func CreateEdge(tx neo4j.Transaction, r *Op) (*Op, error) {
 	_, err := tx.Run(`
-		MATCH (pnode:Table {id: $pid}), (cnode:Table {id: $cid})
+		MATCH (pnode {id: $pid}), (cnode {id: $cid})
 		CREATE (pnode)-[e:DOWNSTREAM {id: $id, database: $database, schemaname: $schemaname, procname: $procname}]->(cnode)
 		RETURN e
 	`, map[string]interface{}{

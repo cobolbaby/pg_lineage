@@ -114,12 +114,12 @@ func main() {
 	// TODO:支持控制台输入
 	// TODO:支持获取pg_stat_statements中的sql语句
 
-	udf := "dm.func_validate_hpe_mmp_workobjectstatus"
+	udf := "dw.func_insert_fact_sn_info_f6"
 
 	op := &Op{
 		Type:       "plpgsql",
-		ProcName:   "func_validate_hpe_mmp_workobjectstatus",
-		SchemaName: "dm",
+		ProcName:   "func_insert_fact_sn_info_f6",
+		SchemaName: "dw",
 		Comment:    "",
 		Owner:      &Owner{Username: "postgres", Nickname: "postgres", ID: "1"},
 		SrcID:      "",
@@ -142,6 +142,11 @@ func main() {
 	// Handle driver lifetime based on your application lifetime requirements  driver's lifetime is usually
 	// bound by the application lifetime, which usually implies one driver instance per application
 	defer driver.Close()
+
+	// 一上来先重置
+	if err := ResetGraph(driver); err != nil {
+		log.Fatalln("ResetGraph err: ", err)
+	}
 
 	rows, err := db.Query(fmt.Sprintf(PLPGSQL_GET_FUNC_DEFINITION, udf))
 	if err != nil {
