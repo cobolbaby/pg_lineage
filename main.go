@@ -28,7 +28,7 @@ var (
 	PLPGSQL_GET_FUNC_DEFINITION = `
 		SELECT nspname, proname, pg_get_functiondef(p.oid) as definition
 		FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-		WHERE nspname || '.' || proname = '%s'
+		WHERE nspname = '%s' and proname = '%s'
 		LIMIT 1;
 	`
 )
@@ -102,6 +102,15 @@ func (o *Op) GetID() string {
 	return o.SchemaName + "." + o.ProcName
 }
 
+type QueryStore struct {
+	Query     string
+	Calls     uint32
+	TotalTime float64
+	MinTime   float64
+	MaxTime   float64
+	MeanTime  float64
+}
+
 // 过滤部分关键词
 func filterUnhandledCommands(content string) string {
 	return PLPGSQL_UNHANLED_COMMANDS.ReplaceAllString(content, "")
@@ -119,24 +128,9 @@ func init() {
 func main() {
 
 	// TODO:支持控制台输入
-	// TODO:支持获取pg_stat_statements中的sql语句
-
-	udf := "dw.func_insert_fact_sn_info_f6"
-
-	op := &Op{
-		Type:       "plpgsql",
-		ProcName:   "func_insert_fact_sn_info_f6",
-		SchemaName: "dw",
-		Comment:    "",
-		Owner:      &Owner{Username: "postgres", Nickname: "postgres", ID: "1"},
-		SrcID:      "",
-		DestID:     "",
-	}
 
 	// 创建 PG 数据库连接，并执行SQL语句
-	psqlInfo := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable",
-		DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME)
-	db, err := sql.Open("postgres", psqlInfo)
+	db, err := sql.Open("postgres", DB_DSN)
 	if err != nil {
 		log.Fatal("sql.Open err: ", err)
 	}
@@ -150,12 +144,54 @@ func main() {
 	// bound by the application lifetime, which usually implies one driver instance per application
 	defer driver.Close()
 
-	// 一上来先重置
+	// 一上来先重置，避免重复写入
 	if err := ResetGraph(driver); err != nil {
 		log.Fatal("ResetGraph err: ", err)
 	}
 
-	rows, err := db.Query(fmt.Sprintf(PLPGSQL_GET_FUNC_DEFINITION, udf))
+	// 支持获取pg_stat_statements中的sql语句
+	querys, err := db.Query(`
+		SELECT 
+			s.query, s.calls, s.total_time, s.min_time, s.max_time, s.mean_time
+		FROM 
+			pg_stat_statements s
+		JOIN
+			pg_database d ON d.oid = s.dbid
+		WHERE
+			d.datname = 'bdc'
+		ORDER BY
+			s.calls DESC
+		Limit 100;
+	`)
+	if err != nil {
+		log.Fatal("db.Query err: ", err)
+	}
+	defer querys.Close()
+
+	var qs QueryStore
+	for querys.Next() {
+		_ = querys.Scan(&qs.Query, &qs.Calls, &qs.TotalTime, &qs.MinTime, &qs.MaxTime, &qs.MeanTime)
+
+		queryRaw, _ := pg_query.ParseToJSON(qs.Query)
+		log.Debug(queryRaw)
+
+		// 检查是否存在 UDF
+		if strings.Contains(queryRaw, "RangeFunction") {
+			break
+		}
+	}
+
+	// queryRaw, _ := pg_query.ParseToJSON(qs.Query)
+	// v := gjson.Parse(queryRaw)
+	// log.Debug(v)
+
+	// 获取相关定义
+	op := &Op{
+		Type:       "plpgsql",
+		ProcName:   "func_insert_fact_sn_info_f6",
+		SchemaName: "dw",
+	}
+	rows, err := db.Query(fmt.Sprintf(PLPGSQL_GET_FUNC_DEFINITION, op.SchemaName, op.ProcName))
 	if err != nil {
 		log.Fatal("db.Query err: ", err)
 	}
