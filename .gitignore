@@ -1,2 +1,6 @@
 config.go
-*.py
+dist
+logs
+vendor
+.fuse*
+__debug_bin

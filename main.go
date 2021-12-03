@@ -3,18 +3,16 @@ package main
 import (
 	"database/sql"
 	"fmt"
-	"log"
 	"regexp"
 	"strings"
 	"time"
 
-	"github.com/cobolbaby/lineage/depgraph"
-
+	"github.com/cobolbaby/lineage/pkg/depgraph"
+	"github.com/cobolbaby/lineage/pkg/log"
+	_ "github.com/lib/pq"
 	"github.com/neo4j/neo4j-go-driver/v4/neo4j"
 	pg_query "github.com/pganalyze/pg_query_go/v2"
 	"github.com/tidwall/gjson"
-
-	_ "github.com/lib/pq"
 )
 
 var (
@@ -109,6 +107,15 @@ func filterUnhandledCommands(content string) string {
 	return PLPGSQL_UNHANLED_COMMANDS.ReplaceAllString(content, "")
 }
 
+func init() {
+	if err := log.InitLogger(&log.LoggerConfig{
+		Level: "debug",
+		Path:  "./logs/lineage.log",
+	}); err != nil {
+		fmt.Println(err)
+	}
+}
+
 func main() {
 
 	// TODO:支持控制台输入
@@ -131,13 +138,13 @@ func main() {
 		DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME)
 	db, err := sql.Open("postgres", psqlInfo)
 	if err != nil {
-		log.Fatalln("sql.Open err: ", err)
+		log.Fatal("sql.Open err: ", err)
 	}
 	defer db.Close()
 
 	driver, err := neo4j.NewDriver(NEO4J_URL, neo4j.BasicAuth(NEO4J_USER, NEO4J_PASSWORD, ""))
 	if err != nil {
-		log.Fatalf("neo4j.NewDriver err: %s", err)
+		log.Fatal("neo4j.NewDriver err: ", err)
 	}
 	// Handle driver lifetime based on your application lifetime requirements  driver's lifetime is usually
 	// bound by the application lifetime, which usually implies one driver instance per application
@@ -145,12 +152,12 @@ func main() {
 
 	// 一上来先重置
 	if err := ResetGraph(driver); err != nil {
-		log.Fatalln("ResetGraph err: ", err)
+		log.Fatal("ResetGraph err: ", err)
 	}
 
 	rows, err := db.Query(fmt.Sprintf(PLPGSQL_GET_FUNC_DEFINITION, udf))
 	if err != nil {
-		log.Fatalln("db.Query err: ", err)
+		log.Fatal("db.Query err: ", err)
 	}
 	defer rows.Close()
 
@@ -162,11 +169,11 @@ func main() {
 		err := rows.Scan(&nspname, &proname, &definition)
 		switch err {
 		case sql.ErrNoRows:
-			log.Println("No rows were returned")
+			log.Warn("No rows were returned")
 		case nil:
-			log.Printf("Query Data = (%s, %s)\n", nspname, proname)
+			log.Infof("Query Data = (%s, %s)\n", nspname, proname)
 		default:
-			log.Fatalln("rows.Scan err: ", err)
+			log.Fatal("rows.Scan err: ", err)
 		}
 	}
 
@@ -176,12 +183,12 @@ func main() {
 
 	tree, err := pg_query.ParsePlPgSqlToJSON(plpgsql)
 	if err != nil {
-		log.Fatalln("pg_query.ParsePlPgSqlToJSON err: ", err)
+		log.Fatal("pg_query.ParsePlPgSqlToJSON err: ", err)
 	}
 
 	for _, v := range gjson.Parse(tree).Array() {
-		// TODO:根据 url 获取 db 别名
-		sqlTree := depgraph.New("IPT_PG_BDC")
+		// 重新生成
+		sqlTree := depgraph.New(DB_ALIAS)
 
 		for _, action := range v.Get("PLpgSQL_function.action.PLpgSQL_stmt_block.body").Array() {
 			// 遍历属性
@@ -193,24 +200,23 @@ func main() {
 
 				// 递归调用 Parse
 				if err := SQLParser(sqlTree, key.String(), value.String()); err != nil {
-					log.Printf("pg_query.ParseToJSON err: %s, sql: %s", err, value.String())
+					log.Errorf("pg_query.ParseToJSON err: %s, sql: %s", err, value.String())
 					return false
 				}
 
 				return true
 			})
-
 		}
 
 		// TODO:完善点的信息
 
+		log.Debugf("Graph: %+v", sqlTree)
 		for i, layer := range sqlTree.TopoSortedLayers() {
-			log.Printf("Graph %d: %s\n", i, strings.Join(layer, ", "))
+			log.Infof("Graph %d: %s\n", i, strings.Join(layer, ", "))
 		}
 
-		// log.Printf("%s Parser: %#v\n", key, *sqlTree)
 		if err := CreateGraph(driver, sqlTree.ShrinkGraph(), op); err != nil {
-			log.Printf("CreateGraph err: %s", err)
+			log.Error("CreateGraph err: ", err)
 		}
 	}
 

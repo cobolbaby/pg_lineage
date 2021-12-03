@@ -6,7 +6,7 @@ import (
 
 	"errors"
 
-	"github.com/cobolbaby/lineage/depgraph"
+	"github.com/cobolbaby/lineage/pkg/depgraph"
 	pg_query "github.com/pganalyze/pg_query_go/v2"
 	"github.com/tidwall/gjson"
 )

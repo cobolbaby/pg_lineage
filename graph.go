@@ -1,10 +1,10 @@
 package main
 
 import (
-	"log"
 	"strings"
 
-	"github.com/cobolbaby/lineage/depgraph"
+	"github.com/cobolbaby/lineage/pkg/depgraph"
+	"github.com/cobolbaby/lineage/pkg/log"
 	"github.com/neo4j/neo4j-go-driver/v4/neo4j"
 )
 
@@ -33,9 +33,9 @@ func CreateGraph(driver neo4j.Driver, graph *depgraph.Graph, extends *Op) error 
 	session := driver.NewSession(neo4j.SessionConfig{})
 	defer session.Close()
 
-	log.Printf("sqlTree.ShrinkGraph: %+v", graph)
+	log.Debugf("ShrinkGraph: %+v", graph)
 	for i, layer := range graph.TopoSortedLayers() {
-		log.Printf("ShrinkGraph %d: %s\n", i, strings.Join(layer, ", "))
+		log.Infof("ShrinkGraph %d: %s\n", i, strings.Join(layer, ", "))
 	}
 
 	_, err := session.WriteTransaction(func(tx neo4j.Transaction) (interface{}, error) {
@@ -47,6 +47,7 @@ func CreateGraph(driver neo4j.Driver, graph *depgraph.Graph, extends *Op) error 
 				return nil, err
 			}
 		}
+		// ? 创建 UDF 点?
 		// 创建线
 		for k, v := range graph.GetRelationships() {
 			for kk := range v {
