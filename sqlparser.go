@@ -327,3 +327,43 @@ func parseJoinClause(v gjson.Result) []*Record {
 
 	return records
 }
+
+func parseFunc(v gjson.Result) *Op {
+	var records *Op
+
+	// select * from func(1,2,3)
+	if v.Get("fromClause").Exists() {
+		fromClause := v.Get("fromClause").Array()
+		for _, vv := range fromClause {
+
+			if vv.Get("RangeFunction").Exists() {
+				udfs := vv.Get("RangeFunction.functions").Array()
+				for _, vvv := range udfs {
+
+					// fix???
+					FuncCall := vvv.Get("List.items[0].FuncCall")
+					if FuncCall.Exists() {
+						funcname := FuncCall.Get("funcname").Array()
+
+						if len(funcname) == 2 {
+							records = &Op{
+								ProcName:   funcname[1].Get("String.str").String(),
+								SchemaName: funcname[0].Get("String.str").String(),
+								Type:       "plpgsql",
+							}
+						}
+						if len(funcname) == 1 {
+							records = &Op{
+								ProcName:   funcname[0].Get("String.str").String(),
+								SchemaName: "public",
+								Type:       "plpgsql",
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return records
+}

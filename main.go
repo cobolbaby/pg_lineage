@@ -159,8 +159,9 @@ func main() {
 			pg_database d ON d.oid = s.dbid
 		WHERE
 			d.datname = 'bdc'
+			AND calls > 10
 		ORDER BY
-			s.calls DESC
+			s.mean_time DESC
 		Limit 100;
 	`)
 	if err != nil {
@@ -169,11 +170,12 @@ func main() {
 	defer querys.Close()
 
 	var qs QueryStore
+	var queryRaw string
 	for querys.Next() {
 		_ = querys.Scan(&qs.Query, &qs.Calls, &qs.TotalTime, &qs.MinTime, &qs.MaxTime, &qs.MeanTime)
 
-		queryRaw, _ := pg_query.ParseToJSON(qs.Query)
-		log.Debug(queryRaw)
+		queryRaw, _ = pg_query.ParseToJSON(qs.Query)
+		log.Debug(qs.Query)
 
 		// 检查是否存在 UDF
 		if strings.Contains(queryRaw, "RangeFunction") {
@@ -181,16 +183,18 @@ func main() {
 		}
 	}
 
-	// queryRaw, _ := pg_query.ParseToJSON(qs.Query)
-	// v := gjson.Parse(queryRaw)
-	// log.Debug(v)
+	op := new(Op)
+	for _, stmt := range gjson.Get(queryRaw, "stmts").Array() {
+		op = parseFunc(stmt.Get("stmt.SelectStmt"))
+		break
+	}
+	// op := &Op{
+	// 	Type:       "plpgsql",
+	// 	ProcName:   "func_insert_fact_sn_info_f6",
+	// 	SchemaName: "dw",
+	// }
 
 	// 获取相关定义
-	op := &Op{
-		Type:       "plpgsql",
-		ProcName:   "func_insert_fact_sn_info_f6",
-		SchemaName: "dw",
-	}
 	rows, err := db.Query(fmt.Sprintf(PLPGSQL_GET_FUNC_DEFINITION, op.SchemaName, op.ProcName))
 	if err != nil {
 		log.Fatal("db.Query err: ", err)
