@@ -7,7 +7,6 @@ import (
 
 	"github.com/cobolbaby/lineage/pkg/depgraph"
 	"github.com/mitchellh/copystructure"
-	pg_query "github.com/pganalyze/pg_query_go/v2"
 )
 
 type Record struct {
@@ -124,19 +123,6 @@ func main() {
 	*gc2 = *g
 	fmt.Printf("new(depgraph.Graph) *gc2 = *g, g: %+v, gc: %+v\n", g, gc2)
 
-	// 验证 常规 sql 解析结果
-	dml1 := `
-		CREATE TABLE tbl2 as
-		SELECT * FROM tbl1;
-	`
-	tree, _ := pg_query.ParseToJSON(dml1)
-	fmt.Printf("%s\n", tree)
-
-	dml2 := `
-		select * from dw.func_insert_test_table();
-	`
-	tree, _ = pg_query.ParseToJSON(dml2)
-	fmt.Printf("%s\n", tree)
 }
 
 // 如果 depgraph.Node 为指针，以下方法无法做到深拷贝
