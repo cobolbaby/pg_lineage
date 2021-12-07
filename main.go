@@ -48,7 +48,7 @@ type QueryStore struct {
 
 func init() {
 	if err := log.InitLogger(&log.LoggerConfig{
-		Level: "error",
+		Level: "info",
 		Path:  "./logs/lineage.log",
 	}); err != nil {
 		fmt.Println(err)
@@ -104,14 +104,14 @@ func main() {
 		// 	SchemaName: "dw",
 		// }
 		if err := HandleUDF(sqlTree, db, udf); err != nil {
-			log.Error("HandleUDF err: ", err)
+			log.Errorf("HandleUDF %+v, err: %s", udf, err)
 			continue
 		}
 
-		// log.Debugf("UDF Graph: %+v", sqlTree)
-		// for i, layer := range sqlTree.TopoSortedLayers() {
-		// 	log.Debugf("UDF Graph %d: %s\n", i, strings.Join(layer, ", "))
-		// }
+		log.Debugf("UDF Graph: %+v", sqlTree)
+		for i, layer := range sqlTree.TopoSortedLayers() {
+			log.Debugf("UDF Graph %d: %s\n", i, strings.Join(layer, ", "))
+		}
 
 		// TODO:完善辅助信息
 
@@ -124,6 +124,8 @@ func main() {
 
 // 解析函数调用
 func HandleUDF(sqlTree *depgraph.Graph, db *sql.DB, udf *Op) error {
+	log.Infof("HandleUDF: %s.%s", udf.SchemaName, udf.ProcName)
+
 	// 排除系统函数的干扰 e.g. select now()
 	if udf.SchemaName == "" || udf.SchemaName == "pg_catalog" {
 		return fmt.Errorf("UDF %s is system function", udf.ProcName)
@@ -138,7 +140,7 @@ func HandleUDF(sqlTree *depgraph.Graph, db *sql.DB, udf *Op) error {
 	// 字符串过滤，后期 pg_query 支持 set 了，可以去掉
 	// https://github.com/pganalyze/libpg_query/issues/125
 	plpgsql := filterUnhandledCommands(definition)
-	log.Info("plpgsql: ", plpgsql)
+	// log.Debug("plpgsql: ", plpgsql)
 
 	if err := ParseUDF(sqlTree, plpgsql); err != nil {
 		log.Errorf("ParseUDF %+v, err: %s", udf, err)
