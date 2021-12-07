@@ -33,9 +33,9 @@ func CreateGraph(driver neo4j.Driver, graph *depgraph.Graph, extends *Op) error 
 	session := driver.NewSession(neo4j.SessionConfig{})
 	defer session.Close()
 
-	log.Debugf("ShrinkGraph: %+v", graph)
+	log.Infof("ShrinkGraph: %+v", graph)
 	for i, layer := range graph.TopoSortedLayers() {
-		log.Infof("ShrinkGraph %d: %s\n", i, strings.Join(layer, ", "))
+		log.Infof("ShrinkGraph %d: %s", i, strings.Join(layer, ", "))
 	}
 
 	_, err := session.WriteTransaction(func(tx neo4j.Transaction) (interface{}, error) {
@@ -43,6 +43,13 @@ func CreateGraph(driver neo4j.Driver, graph *depgraph.Graph, extends *Op) error 
 		for _, v := range graph.GetNodes() {
 			r, _ := v.(*Record)
 			r.Database = graph.GetNamespace()
+
+			// fix: ShrinkGraph 中仍然存在临时节点
+			if r.SchemaName == "" {
+				log.Warnf("Invalid r.SchemaName: %+v", r)
+				continue
+			}
+
 			if _, err := CreateNode(tx, r); err != nil {
 				return nil, err
 			}
