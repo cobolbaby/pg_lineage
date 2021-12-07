@@ -14,7 +14,7 @@ import (
 )
 
 var (
-	PLPGSQL_UNHANLED_COMMANDS   = regexp.MustCompile(`set\s+(time zone|enable)(.*?);`)
+	PLPGSQL_UNHANLED_COMMANDS   = regexp.MustCompile(`(?i)set\s+(time zone|enable_)(.*?);`)
 	PLPGSQL_GET_FUNC_DEFINITION = `
 		SELECT nspname, proname, pg_get_functiondef(p.oid) as definition
 		FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
@@ -98,7 +98,7 @@ func main() {
 		if err != nil {
 			continue
 		}
-		// udf := &Op{
+		// udf = &Op{
 		// 	Type:       "plpgsql",
 		// 	ProcName:   "func_insert_fact_sn_info_f6",
 		// 	SchemaName: "dw",
@@ -133,6 +133,7 @@ func HandleUDF(sqlTree *depgraph.Graph, db *sql.DB, udf *Op) error {
 	// 字符串过滤，后期 pg_query 支持 set 了，可以去掉
 	// https://github.com/pganalyze/libpg_query/issues/125
 	plpgsql := filterUnhandledCommands(definition)
+	log.Info("plpgsql: ", plpgsql)
 
 	if err := ParseUDF(sqlTree, plpgsql); err != nil {
 		log.Errorf("ParseUDF err: %s", err)
