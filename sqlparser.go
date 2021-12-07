@@ -105,8 +105,8 @@ func ParseUDF(sqlTree *depgraph.Graph, plpgsql string) error {
 	if err != nil {
 		return err
 	}
-
 	// log.Debugf("pg_query.ParsePlPgSqlToJSON: %s", raw)
+
 	v := gjson.Parse(raw).Array()[0]
 
 	for _, action := range v.Get("PLpgSQL_function.action.PLpgSQL_stmt_block.body").Array() {
@@ -461,12 +461,11 @@ func IdentifyFuncCall(sql string) (*Op, error) {
 		if v.Get("SelectStmt").Exists() {
 
 			// 形如 select dw.func_insert_xxxx(a,b)
-			targetList := v.Get("SelectStmt.targetList").Array()
-			for _, vv := range targetList {
-
-				if vv.Get("ResTarget.val.FuncCall").Exists() {
-					// 只解析第一个结构
-					records = parseFuncCall(vv.Get("ResTarget.val"))
+			// fix: 只匹配不含 from 的 select 语句，避免 select count(1) from tbl 等 SQL 的干扰
+			if !v.Get("SelectStmt.fromClause").Exists() {
+				targetList := v.Get("SelectStmt.targetList").Array()
+				if len(targetList) == 1 && targetList[0].Get("ResTarget.val.FuncCall").Exists() {
+					records = parseFuncCall(targetList[0].Get("ResTarget.val"))
 					break
 				}
 			}
@@ -476,17 +475,14 @@ func IdentifyFuncCall(sql string) (*Op, error) {
 			for _, vv := range fromClause {
 
 				if vv.Get("RangeFunction").Exists() {
-
 					// https://github.com/tidwall/gjson#path-syntax
 					udfs := vv.Get("RangeFunction.functions.#.List.items").Array()
-					for _, vvv := range udfs {
-						// 只解析第一个结构
-						records = parseFuncCall(vvv.Array()[0])
-						break
-					}
+
+					// 只取第一个函数
+					records = parseFuncCall(udfs[0].Array()[0])
+					break
 				}
 			}
-
 		}
 
 		// 支持通过 call 方式调用
