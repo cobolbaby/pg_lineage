@@ -5,23 +5,135 @@ import (
 	// "github.com/cobolbaby/lineage/depgraph"
 
 	"errors"
+	"strings"
+	"time"
 
 	"github.com/cobolbaby/lineage/pkg/depgraph"
+	"github.com/cobolbaby/lineage/pkg/log"
 	pg_query "github.com/pganalyze/pg_query_go/v2"
 	"github.com/tidwall/gjson"
 )
+
+var (
+	PLPGSQL_BLACKLIST_STMTS = map[string]bool{
+		"PLpgSQL_stmt_assign":     true,
+		"PLpgSQL_stmt_raise":      true,
+		"PLpgSQL_stmt_execsql":    false,
+		"PLpgSQL_stmt_if":         true,
+		"PLpgSQL_stmt_dynexecute": true, // 比较复杂，不太好支持
+		"PLpgSQL_stmt_perform":    true, // 暂不支持
+	}
+)
+
+type Owner struct {
+	Username string
+	Nickname string
+	ID       string
+}
+
+type Record struct {
+	SchemaName string
+	RelName    string
+	Type       string
+	Columns    []string
+	Comment    string
+	Visited    string
+	Size       int64
+	Layer      string
+	Database   string
+	Owner      *Owner
+	CreateTime time.Time
+	Labels     []string
+	ID         string
+}
+
+func (r *Record) GetID() string {
+	if r.ID != "" {
+		return r.ID
+	}
+
+	if r.SchemaName != "" {
+		return r.SchemaName + "." + r.RelName
+	} else {
+		switch r.RelName {
+		case "pg_namespace", "pg_class", "pg_attribute", "pg_type":
+			r.SchemaName = "pg_catalog"
+			return r.SchemaName + "." + r.RelName
+		default:
+			return r.RelName
+		}
+	}
+}
+
+func (r *Record) IsTemp() bool {
+	return r.SchemaName == "" ||
+		strings.HasPrefix(r.RelName, "temp_") ||
+		strings.HasPrefix(r.RelName, "tmp_")
+}
+
+type Op struct {
+	Type       string
+	ProcName   string
+	SchemaName string
+	Database   string
+	Comment    string
+	Owner      *Owner
+	SrcID      string
+	DestID     string
+	ID         string
+}
+
+func (o *Op) GetID() string {
+	if o.ID != "" {
+		return o.ID
+	}
+
+	if o.SchemaName == "" {
+		o.SchemaName = "public"
+	}
+	return o.SchemaName + "." + o.ProcName
+}
 
 const (
 	REL_PERSIST     = "p"
 	REL_PERSIST_NOT = "t"
 )
 
-func SQLParser(sqlTree *depgraph.Graph, operator, plan string) error {
+func ParseUDF(sqlTree *depgraph.Graph, plpgsql string) error {
+
+	raw, err := pg_query.ParsePlPgSqlToJSON(plpgsql)
+	if err != nil {
+		return err
+	}
+
+	// log.Debugf("pg_query.ParsePlPgSqlToJSON: %s", raw)
+	v := gjson.Parse(raw).Array()[0]
+
+	for _, action := range v.Get("PLpgSQL_function.action.PLpgSQL_stmt_block.body").Array() {
+		// 遍历属性
+		action.ForEach(func(key, value gjson.Result) bool {
+			// 没有配置，或者屏蔽掉的
+			if enable, ok := PLPGSQL_BLACKLIST_STMTS[key.String()]; ok && enable {
+				return false
+			}
+
+			// 递归调用 Parse
+			if err := parseUDFOperator(sqlTree, key.String(), value.String()); err != nil {
+				log.Errorf("pg_query.ParseToJSON err: %s, sql: %s", err, value.String())
+				return false
+			}
+
+			return true
+		})
+	}
+
+	return nil
+}
+
+func parseUDFOperator(sqlTree *depgraph.Graph, operator, plan string) error {
 	// log.Printf("%s: %s\n", operator, plan)
 
-	var subTree string
 	var subQuery string
-	var err error
 
 	switch operator {
 	case "PLpgSQL_stmt_execsql":
@@ -32,33 +144,41 @@ func SQLParser(sqlTree *depgraph.Graph, operator, plan string) error {
 			return nil
 		}
 
-		subTree, err = pg_query.ParseToJSON(subQuery)
-
 	case "PLpgSQL_stmt_dynexecute":
 		// 支持 execute dynamic sql
 		subQuery = gjson.Get(plan, "query.PLpgSQL_expr.query").String()
-		subTree, err = pg_query.ParseToJSON(subQuery)
+
 	}
 
+	if err := ParseSQL(sqlTree, subQuery); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func ParseSQL(sqlTree *depgraph.Graph, sql string) error {
+
+	raw, err := pg_query.ParseToJSON(sql)
 	if err != nil {
 		return err
 	}
-	// log.Printf("%s: %s\n", subQuery, subTree)
+	// log.Debugf("%s: %s\n", sql, raw)
 
-	stmts := gjson.Get(subTree, "stmts").Array()
+	stmts := gjson.Get(raw, "stmts.#.stmt").Array()
 	for _, v := range stmts {
 
 		// 跳过 analyze/drop/truncate/create index 语句
-		if v.Get("stmt.VacuumStmt").Exists() ||
-			v.Get("stmt.DropStmt").Exists() ||
-			v.Get("stmt.TruncateStmt").Exists() ||
-			v.Get("stmt.IndexStmt").Exists() {
+		if v.Get("VacuumStmt").Exists() ||
+			v.Get("DropStmt").Exists() ||
+			v.Get("TruncateStmt").Exists() ||
+			v.Get("IndexStmt").Exists() {
 			break
 		}
 
 		// create table ... as 操作
-		if v.Get("stmt.CreateTableAsStmt").Exists() {
-			cvv := v.Get("stmt.CreateTableAsStmt")
+		if v.Get("CreateTableAsStmt").Exists() {
+			cvv := v.Get("CreateTableAsStmt")
 
 			tnode := &Record{
 				RelName:    cvv.Get("into.rel.relname").String(),
@@ -81,16 +201,16 @@ func SQLParser(sqlTree *depgraph.Graph, operator, plan string) error {
 		}
 
 		// 单独创建 table
-		if v.Get("stmt.CreateStmt").Exists() {
-			vv := v.Get("stmt.CreateStmt")
+		if v.Get("CreateStmt").Exists() {
+			vv := v.Get("CreateStmt")
 			if r := parseRelname(vv); r != nil {
 				sqlTree.AddNode(r)
 			}
 		}
 
 		// 如果该 SQL 为 select 操作，则获取 from
-		if v.Get("stmt.SelectStmt").Exists() {
-			vv := v.Get("stmt.SelectStmt")
+		if v.Get("SelectStmt").Exists() {
+			vv := v.Get("SelectStmt")
 			for _, r := range parseFromClause(vv) {
 				sqlTree.AddNode(r)
 			}
@@ -100,8 +220,8 @@ func SQLParser(sqlTree *depgraph.Graph, operator, plan string) error {
 		// insert into tbl ... select * from ...
 		// with ... insert into tbl ... select * from ...
 		// insert into tbl with ... select * from ...
-		if v.Get("stmt.InsertStmt").Exists() {
-			ivv := v.Get("stmt.InsertStmt")
+		if v.Get("InsertStmt").Exists() {
+			ivv := v.Get("InsertStmt")
 
 			if ivv.Get("withClause").Exists() {
 				parseWithClause(ivv, sqlTree)
@@ -126,8 +246,8 @@ func SQLParser(sqlTree *depgraph.Graph, operator, plan string) error {
 		// update tbl set ...
 		// update tbl set ... from tbl2
 		// update tbl set ... from (select * from tbl2) tbl3 where ...
-		if v.Get("stmt.UpdateStmt").Exists() {
-			vv := v.Get("stmt.UpdateStmt")
+		if v.Get("UpdateStmt").Exists() {
+			vv := v.Get("UpdateStmt")
 			tnode := parseRelname(vv)
 			sqlTree.AddNode(tnode)
 
@@ -141,8 +261,8 @@ func SQLParser(sqlTree *depgraph.Graph, operator, plan string) error {
 		// 如果该 SQL 为 delete 操作，则填充目标节点
 		// delete from tbl where ...
 		// delete from tbl using tbl2 where ...
-		if v.Get("stmt.DeleteStmt").Exists() {
-			vv := v.Get("stmt.DeleteStmt")
+		if v.Get("DeleteStmt").Exists() {
+			vv := v.Get("DeleteStmt")
 			tnode := parseRelname(vv)
 			sqlTree.AddNode(tnode)
 
@@ -328,42 +448,68 @@ func parseJoinClause(v gjson.Result) []*Record {
 	return records
 }
 
-func parseFunc(v gjson.Result) *Op {
+func IdentifyFuncCall(sql string) (*Op, error) {
+	log.Debugf("IdentifyFuncCall %s", sql)
+
 	var records *Op
 
-	// select * from func(1,2,3)
-	if v.Get("fromClause").Exists() {
-		fromClause := v.Get("fromClause").Array()
-		for _, vv := range fromClause {
+	raw, _ := pg_query.ParseToJSON(sql)
+	stmts := gjson.Get(raw, "stmts.#.stmt").Array()
+	for _, v := range stmts {
 
-			if vv.Get("RangeFunction").Exists() {
-				udfs := vv.Get("RangeFunction.functions").Array()
-				for _, vvv := range udfs {
+		// 支持通过 select 方式调用
+		if v.Get("SelectStmt").Exists() {
+			// TODO:形如 select dw.func_insert_xxxx(a,b)
+			// ...
 
-					// fix???
-					FuncCall := vvv.Get("List.items[0].FuncCall")
-					if FuncCall.Exists() {
-						funcname := FuncCall.Get("funcname").Array()
+			// 形如 select * from report.query_xxxx(1,2,3)
+			fromClause := v.Get("SelectStmt.fromClause").Array()
+			for _, vv := range fromClause {
 
-						if len(funcname) == 2 {
-							records = &Op{
-								ProcName:   funcname[1].Get("String.str").String(),
-								SchemaName: funcname[0].Get("String.str").String(),
-								Type:       "plpgsql",
-							}
-						}
-						if len(funcname) == 1 {
-							records = &Op{
-								ProcName:   funcname[0].Get("String.str").String(),
-								SchemaName: "public",
-								Type:       "plpgsql",
-							}
-						}
+				if vv.Get("RangeFunction").Exists() {
+
+					// https://github.com/tidwall/gjson#path-syntax
+					udfs := vv.Get("RangeFunction.functions.#.List.items").Array()
+					for _, vvv := range udfs {
+						// 只解析第一个函数
+						records = parseFuncCall(vvv.Array()[0])
+						break
 					}
 				}
 			}
+
+		}
+
+		// 支持通过 call 方式调用
+	}
+
+	if records == nil {
+		return nil, errors.New("not a function call")
+	}
+	return records, nil
+}
+
+func parseFuncCall(v gjson.Result) *Op {
+	if !v.Get("FuncCall").Exists() {
+		return nil
+	}
+
+	funcname := v.Get("FuncCall.funcname.#.String.str").Array()
+
+	if len(funcname) == 2 {
+		return &Op{
+			ProcName:   funcname[1].String(),
+			SchemaName: funcname[0].String(),
+			Type:       "plpgsql",
+		}
+	}
+	if len(funcname) == 1 {
+		return &Op{
+			ProcName:   funcname[0].String(),
+			SchemaName: "public",
+			Type:       "plpgsql",
 		}
 	}
 
-	return records
+	return nil
 }
