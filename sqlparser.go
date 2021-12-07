@@ -459,8 +459,17 @@ func IdentifyFuncCall(sql string) (*Op, error) {
 
 		// 支持通过 select 方式调用
 		if v.Get("SelectStmt").Exists() {
-			// TODO:形如 select dw.func_insert_xxxx(a,b)
-			// ...
+
+			// 形如 select dw.func_insert_xxxx(a,b)
+			targetList := v.Get("SelectStmt.targetList").Array()
+			for _, vv := range targetList {
+
+				if vv.Get("ResTarget.val.FuncCall").Exists() {
+					// 只解析第一个结构
+					records = parseFuncCall(vv.Get("ResTarget.val"))
+					break
+				}
+			}
 
 			// 形如 select * from report.query_xxxx(1,2,3)
 			fromClause := v.Get("SelectStmt.fromClause").Array()
@@ -471,7 +480,7 @@ func IdentifyFuncCall(sql string) (*Op, error) {
 					// https://github.com/tidwall/gjson#path-syntax
 					udfs := vv.Get("RangeFunction.functions.#.List.items").Array()
 					for _, vvv := range udfs {
-						// 只解析第一个函数
+						// 只解析第一个结构
 						records = parseFuncCall(vvv.Array()[0])
 						break
 					}
@@ -506,7 +515,7 @@ func parseFuncCall(v gjson.Result) *Op {
 	if len(funcname) == 1 {
 		return &Op{
 			ProcName:   funcname[0].String(),
-			SchemaName: "public",
+			SchemaName: "",
 			Type:       "plpgsql",
 		}
 	}

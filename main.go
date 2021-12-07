@@ -48,7 +48,7 @@ type QueryStore struct {
 
 func init() {
 	if err := log.InitLogger(&log.LoggerConfig{
-		Level: "info",
+		Level: "error",
 		Path:  "./logs/lineage.log",
 	}); err != nil {
 		fmt.Println(err)
@@ -105,6 +105,7 @@ func main() {
 		// }
 		if err := HandleUDF(sqlTree, db, udf); err != nil {
 			log.Error("HandleUDF err: ", err)
+			continue
 		}
 
 		// log.Debugf("UDF Graph: %+v", sqlTree)
@@ -123,6 +124,10 @@ func main() {
 
 // 解析函数调用
 func HandleUDF(sqlTree *depgraph.Graph, db *sql.DB, udf *Op) error {
+	// 排除系统函数的干扰 e.g. select now()
+	if udf.SchemaName == "" || udf.SchemaName == "pg_catalog" {
+		return fmt.Errorf("UDF %s is system function", udf.ProcName)
+	}
 
 	definition, err := GetUDFDefinition(db, udf)
 	if err != nil {
@@ -136,7 +141,7 @@ func HandleUDF(sqlTree *depgraph.Graph, db *sql.DB, udf *Op) error {
 	log.Info("plpgsql: ", plpgsql)
 
 	if err := ParseUDF(sqlTree, plpgsql); err != nil {
-		log.Errorf("ParseUDF err: %s", err)
+		log.Errorf("ParseUDF %+v, err: %s", udf, err)
 		return err
 	}
 
