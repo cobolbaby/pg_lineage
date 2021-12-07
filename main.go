@@ -65,10 +65,7 @@ func main() {
 
 	uri, _ := url.Parse(DB_DSN)
 	dbName := strings.TrimPrefix(uri.Path, "/")
-	dbAlias, ok := DB_ALIAS[uri.Host]
-	if !ok {
-		dbAlias = "unknown"
-	}
+	dbAlias := DB_ALIAS
 
 	driver, err := neo4j.NewDriver(NEO4J_URL, neo4j.BasicAuth(NEO4J_USER, NEO4J_PASSWORD, ""))
 	if err != nil {
