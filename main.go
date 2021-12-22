@@ -37,6 +37,12 @@ var (
 	`
 )
 
+type DataSource struct {
+	Alias string
+	Name  string
+	DB    *sql.DB
+}
+
 type QueryStore struct {
 	Query     string
 	Calls     uint32
@@ -64,8 +70,11 @@ func main() {
 	defer db.Close()
 
 	uri, _ := url.Parse(DB_DSN)
-	dbName := strings.TrimPrefix(uri.Path, "/")
-	dbAlias := DB_ALIAS
+	ds := &DataSource{
+		Alias: DB_ALIAS,
+		Name:  strings.TrimPrefix(uri.Path, "/"),
+		DB:    db,
+	}
 
 	driver, err := neo4j.NewDriver(NEO4J_URL, neo4j.BasicAuth(NEO4J_USER, NEO4J_PASSWORD, ""))
 	if err != nil {
@@ -81,7 +90,7 @@ func main() {
 	}
 
 	// 支持获取pg_stat_statements中的sql语句
-	querys, err := db.Query(fmt.Sprintf(PG_QUERY_STORE, dbName))
+	querys, err := ds.DB.Query(fmt.Sprintf(PG_QUERY_STORE, ds.Name))
 	if err != nil {
 		log.Fatal("db.Query err: ", err)
 	}
@@ -89,37 +98,56 @@ func main() {
 
 	for querys.Next() {
 
-		// 一个 UDF 一张图
-		sqlTree := depgraph.New(dbAlias)
-
 		var qs QueryStore
 		_ = querys.Scan(&qs.Query, &qs.Calls, &qs.TotalTime, &qs.MinTime, &qs.MaxTime, &qs.MeanTime)
-		udf, err := IdentifyFuncCall(qs.Query)
-		if err != nil {
-			continue
-		}
-		// udf = &Op{
-		// 	Type:       "plpgsql",
-		// 	ProcName:   "func_insert_fact_sn_info_f6",
-		// 	SchemaName: "dw",
-		// }
-		if err := HandleUDF(sqlTree, db, udf); err != nil {
-			log.Errorf("HandleUDF %+v, err: %s", udf, err)
-			continue
+
+		if true {
+			generateTableLineage(qs.Query, ds, driver)
 		}
 
-		log.Debugf("UDF Graph: %+v", sqlTree)
-		for i, layer := range sqlTree.TopoSortedLayers() {
-			log.Debugf("UDF Graph %d: %s\n", i, strings.Join(layer, ", "))
+		if true {
+			generateTableJoinRelation(qs.Query, ds, driver)
 		}
 
-		// TODO:完善辅助信息
-
-		if err := CreateGraph(driver, sqlTree.ShrinkGraph(), udf); err != nil {
-			log.Fatal("UDF CreateGraph err: ", err)
-		}
+		// 扩展别的图.
 	}
 
+}
+
+func generateTableJoinRelation(sql string, ds *DataSource, driver neo4j.Driver) {
+
+}
+
+// 生成表血缘关系图
+func generateTableLineage(sql string, ds *DataSource, driver neo4j.Driver) {
+
+	// 一个 UDF 一张图
+	sqlTree := depgraph.New(ds.Alias)
+
+	udf, err := IdentifyFuncCall(sql)
+	if err != nil {
+		return
+	}
+	// udf = &Op{
+	// 	Type:       "plpgsql",
+	// 	ProcName:   "func_insert_fact_sn_info_f6",
+	// 	SchemaName: "dw",
+	// }
+	if err := HandleUDF(sqlTree, ds.DB, udf); err != nil {
+		log.Errorf("HandleUDF %+v, err: %s", udf, err)
+		return
+	}
+
+	log.Debugf("UDF Graph: %+v", sqlTree)
+	for i, layer := range sqlTree.TopoSortedLayers() {
+		log.Debugf("UDF Graph %d: %s\n", i, strings.Join(layer, ", "))
+	}
+
+	// TODO:完善辅助信息
+
+	if err := CreateGraph(driver, sqlTree.ShrinkGraph(), udf); err != nil {
+		log.Errorf("UDF CreateGraph err: %s ", err)
+	}
 }
 
 // 解析函数调用
