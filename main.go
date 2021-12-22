@@ -101,12 +101,12 @@ func main() {
 		var qs QueryStore
 		_ = querys.Scan(&qs.Query, &qs.Calls, &qs.TotalTime, &qs.MinTime, &qs.MaxTime, &qs.MeanTime)
 
-		if true {
-			generateTableLineage(qs.Query, ds, driver)
+		if false {
+			generateTableLineage(&qs, ds, driver)
 		}
 
 		if true {
-			generateTableJoinRelation(qs.Query, ds, driver)
+			generateTableJoinRelation(&qs, ds, driver)
 		}
 
 		// 扩展别的图.
@@ -114,17 +114,31 @@ func main() {
 
 }
 
-func generateTableJoinRelation(sql string, ds *DataSource, driver neo4j.Driver) {
+// 生成一张 JOIN 图
+// 可以推导出关联关系的有 IN / JOIN
+func generateTableJoinRelation(qs *QueryStore, ds *DataSource, driver neo4j.Driver) {
 
+	// 跳过 udf
+	if _, err := IdentifyFuncCall(qs.Query); err == nil {
+		return
+	}
+	log.Infof("generateTableJoinRelation sql: %s", qs.Query)
+
+	// 解析 sql 语句中的 join，如果没有则直接返回
+	// sqlTree := depgraph.New(ds.Alias)
+	// ParseSQL(sqlTree, qs.Query)
+
+	// 依据上面返回的 join 关系，生成一张图
+	// 节点：表名; 关系：Join
 }
 
 // 生成表血缘关系图
-func generateTableLineage(sql string, ds *DataSource, driver neo4j.Driver) {
+func generateTableLineage(qs *QueryStore, ds *DataSource, driver neo4j.Driver) {
 
 	// 一个 UDF 一张图
 	sqlTree := depgraph.New(ds.Alias)
 
-	udf, err := IdentifyFuncCall(sql)
+	udf, err := IdentifyFuncCall(qs.Query)
 	if err != nil {
 		return
 	}
