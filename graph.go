@@ -83,7 +83,7 @@ func CreateNode(tx neo4j.Transaction, r *Record) (*Record, error) {
 	// 需要将 ID 作为唯一主键
 	// CREATE CONSTRAINT ON (cc:CreditCard) ASSERT cc.number IS UNIQUE
 	records, err := tx.Run(`
-		MERGE (n:`+r.SchemaName+` {id: $id}) 
+		MERGE (n:Lineage:`+r.SchemaName+` {id: $id}) 
 		ON CREATE SET n.database = $database, n.schemaname = $schemaname, n.relname = $relname, n.udt = timestamp(), n.size = $size, n.visited = $visited
 		ON MATCH SET n.udt = timestamp(), n.size = $size, n.visited = $visited
 		RETURN n.id
@@ -114,7 +114,7 @@ func CreateNode(tx neo4j.Transaction, r *Record) (*Record, error) {
 func CreateEdge(tx neo4j.Transaction, r *Op) (*Op, error) {
 	_, err := tx.Run(`
 		MATCH (pnode {id: $pid}), (cnode {id: $cid})
-		CREATE (pnode)-[e:DOWNSTREAM {id: $id, database: $database, schemaname: $schemaname, procname: $procname}]->(cnode)
+		CREATE (pnode)-[e:DownStream {id: $id, database: $database, schemaname: $schemaname, procname: $procname}]->(cnode)
 		RETURN e
 	`, map[string]interface{}{
 		"id":         r.Database + "." + r.GetID(),

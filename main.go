@@ -37,6 +37,12 @@ var (
 	`
 )
 
+type DataSource struct {
+	Alias string
+	Name  string
+	DB    *sql.DB
+}
+
 type QueryStore struct {
 	Query     string
 	Calls     uint32
@@ -64,8 +70,11 @@ func main() {
 	defer db.Close()
 
 	uri, _ := url.Parse(DB_DSN)
-	dbName := strings.TrimPrefix(uri.Path, "/")
-	dbAlias := DB_ALIAS
+	ds := &DataSource{
+		Alias: DB_ALIAS,
+		Name:  strings.TrimPrefix(uri.Path, "/"),
+		DB:    db,
+	}
 
 	driver, err := neo4j.NewDriver(NEO4J_URL, neo4j.BasicAuth(NEO4J_USER, NEO4J_PASSWORD, ""))
 	if err != nil {
@@ -81,7 +90,7 @@ func main() {
 	}
 
 	// 支持获取pg_stat_statements中的sql语句
-	querys, err := db.Query(fmt.Sprintf(PG_QUERY_STORE, dbName))
+	querys, err := ds.DB.Query(fmt.Sprintf(PG_QUERY_STORE, ds.Name))
 	if err != nil {
 		log.Fatal("db.Query err: ", err)
 	}
@@ -89,37 +98,70 @@ func main() {
 
 	for querys.Next() {
 
-		// 一个 UDF 一张图
-		sqlTree := depgraph.New(dbAlias)
-
 		var qs QueryStore
 		_ = querys.Scan(&qs.Query, &qs.Calls, &qs.TotalTime, &qs.MinTime, &qs.MaxTime, &qs.MeanTime)
-		udf, err := IdentifyFuncCall(qs.Query)
-		if err != nil {
-			continue
-		}
-		// udf = &Op{
-		// 	Type:       "plpgsql",
-		// 	ProcName:   "func_insert_fact_sn_info_f6",
-		// 	SchemaName: "dw",
-		// }
-		if err := HandleUDF(sqlTree, db, udf); err != nil {
-			log.Errorf("HandleUDF %+v, err: %s", udf, err)
-			continue
+
+		if false {
+			generateTableLineage(&qs, ds, driver)
 		}
 
-		log.Debugf("UDF Graph: %+v", sqlTree)
-		for i, layer := range sqlTree.TopoSortedLayers() {
-			log.Debugf("UDF Graph %d: %s\n", i, strings.Join(layer, ", "))
+		if true {
+			generateTableJoinRelation(&qs, ds, driver)
 		}
 
-		// TODO:完善辅助信息
-
-		if err := CreateGraph(driver, sqlTree.ShrinkGraph(), udf); err != nil {
-			log.Fatal("UDF CreateGraph err: ", err)
-		}
+		// 扩展别的图.
 	}
 
+}
+
+// 生成一张 JOIN 图
+// 可以推导出关联关系的有 IN / JOIN
+func generateTableJoinRelation(qs *QueryStore, ds *DataSource, driver neo4j.Driver) {
+
+	// 跳过 udf
+	if _, err := IdentifyFuncCall(qs.Query); err == nil {
+		return
+	}
+	log.Infof("generateTableJoinRelation sql: %s", qs.Query)
+
+	// 解析 sql 语句中的 join，如果没有则直接返回
+	// sqlTree := depgraph.New(ds.Alias)
+	// ParseSQL(sqlTree, qs.Query)
+
+	// 依据上面返回的 join 关系，生成一张图
+	// 节点：表名; 关系：Join
+}
+
+// 生成表血缘关系图
+func generateTableLineage(qs *QueryStore, ds *DataSource, driver neo4j.Driver) {
+
+	// 一个 UDF 一张图
+	sqlTree := depgraph.New(ds.Alias)
+
+	udf, err := IdentifyFuncCall(qs.Query)
+	if err != nil {
+		return
+	}
+	// udf = &Op{
+	// 	Type:       "plpgsql",
+	// 	ProcName:   "func_insert_fact_sn_info_f6",
+	// 	SchemaName: "dw",
+	// }
+	if err := HandleUDF(sqlTree, ds.DB, udf); err != nil {
+		log.Errorf("HandleUDF %+v, err: %s", udf, err)
+		return
+	}
+
+	log.Debugf("UDF Graph: %+v", sqlTree)
+	for i, layer := range sqlTree.TopoSortedLayers() {
+		log.Debugf("UDF Graph %d: %s\n", i, strings.Join(layer, ", "))
+	}
+
+	// TODO:完善辅助信息
+
+	if err := CreateGraph(driver, sqlTree.ShrinkGraph(), udf); err != nil {
+		log.Errorf("UDF CreateGraph err: %s ", err)
+	}
 }
 
 // 解析函数调用
