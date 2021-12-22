@@ -9,7 +9,7 @@ import (
 func main() {
 
 	sql := `
-		SELECT * FROM tbl1 JOIN tbl2 ON tbl1.id = tbl2.tid;
+		SELECT * FROM demo.tbl1 a JOIN demo.tbl2 b ON a.id = b.tid;
 	`
 
 	result, err := pg_query.Parse(sql)
@@ -21,13 +21,25 @@ func main() {
 	for _, v := range result.Stmts[0].Stmt.GetSelectStmt().GetFromClause() {
 		fmt.Println(v.GetJoinExpr().GetLarg().GetRangeVar())
 
+		// 获取别名定义
+		tblAliasMap := make(map[string]string)
+
+		lrAlias := v.GetJoinExpr().GetLarg().GetRangeVar().GetAlias().GetAliasname()
+		lrReal := v.GetJoinExpr().GetLarg().GetRangeVar().GetSchemaname() + "." + v.GetJoinExpr().GetLarg().GetRangeVar().GetRelname()
+
+		tblAliasMap[lrAlias] = lrReal
+
+		rrAlias := v.GetJoinExpr().GetRarg().GetRangeVar().GetAlias().GetAliasname()
+		rrReal := v.GetJoinExpr().GetRarg().GetRangeVar().GetSchemaname() + "." + v.GetJoinExpr().GetLarg().GetRangeVar().GetRelname()
+
+		tblAliasMap[rrAlias] = rrReal
+
 		lfields := v.GetJoinExpr().GetQuals().GetAExpr().GetLexpr().GetColumnRef().GetFields()
-		fmt.Println(lfields[0].GetString_().GetStr() + "." + lfields[1].GetString_().GetStr())
+		fmt.Println(tblAliasMap[lfields[0].GetString_().GetStr()] + "." + lfields[1].GetString_().GetStr())
 
 		rfields := v.GetJoinExpr().GetQuals().GetAExpr().GetRexpr().GetColumnRef().GetFields()
-		fmt.Println(rfields[0].GetString_().GetStr() + "." + rfields[1].GetString_().GetStr())
+		fmt.Println(tblAliasMap[rfields[0].GetString_().GetStr()] + "." + rfields[1].GetString_().GetStr())
 
-		fmt.Println(v.GetJoinExpr().GetQuals().GetAExpr())
 	}
 
 	/*
