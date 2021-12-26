@@ -19,6 +19,24 @@ func main() {
 
 	// This will output "42"
 	for _, v := range result.Stmts[0].Stmt.GetSelectStmt().GetFromClause() {
+
+		// 优先遍历内层JOIN
+		if v.GetJoinExpr().GetLarg().GetJoinExpr() != nil {
+			// 递归调用
+		}
+		if v.GetJoinExpr().GetRarg().GetJoinExpr() != nil {
+			// 递归调用
+		}
+		// 然后遍历外层JOIN
+		if v.GetJoinExpr().GetLarg().GetRangeVar() != nil {
+			// 解析表名，列名，JOIN条件，记录别名与实体表名的对应关系
+			// 等待外层遍历完之后，先做表名替换，然后筛选出两个表都不是临时表的JOIN条件
+		}
+		if v.GetJoinExpr().GetRarg().GetRangeVar() != nil {
+			// 直接返回
+		}
+		// 将关联条件输出，可以是单个字段关联，也可以是多字段关联
+
 		fmt.Println(v.GetJoinExpr().GetLarg().GetRangeVar())
 
 		// 获取别名定义
@@ -41,11 +59,5 @@ func main() {
 		fmt.Println(tblAliasMap[rfields[0].GetString_().GetStr()] + "." + rfields[1].GetString_().GetStr())
 
 	}
-
-	/*
-		[join_expr:{jointype:JOIN_INNER larg:{range_var:{relname:"tbl1" inh:true relpersistence:"p" location:17}} rarg:{range_var:{relname:"tbl2" inh:true relpersistence:"p" location:27}} quals:{a_expr:{kind:AEXPR_OP name:{string:{str:"="}} lexpr:{column_ref:{fields:{string:{str:"tbl1"}} fields:{string:{str:"id"}} location:35}} rexpr:{column_ref:{fields:{string:{str:"tbl2"}} fields:{string:{str:"tid"}} location:45}} location:43}}}]
-
-		jointype:JOIN_INNER  larg:{range_var:{relname:"tbl1"  inh:true  relpersistence:"p"  location:17}}  rarg:{range_var:{relname:"tbl2"  inh:true  relpersistence:"p"  location:27}}  quals:{a_expr:{kind:AEXPR_OP  name:{string:{str:"="}}  lexpr:{column_ref:{fields:{string:{str:"tbl1"}}  fields:{string:{str:"id"}}  location:35}}  rexpr:{column_ref:{fields:{string:{str:"tbl2"}}  fields:{string:{str:"tid"}}  location:45}}  location:43}}
-	*/
 
 }
