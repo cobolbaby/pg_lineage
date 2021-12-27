@@ -17,6 +17,16 @@ func main() {
 		demo.tbl1 a
 		JOIN demo.tbl2 b ON a.id = b.aid AND a.name = b.name
 		JOIN demo.tbl3 c ON a.id = c.aid;
+	SELECT
+    	*
+	FROM
+		demo.tbl1 aa
+		JOIN demo.tbl3 cc ON aa.id = cc.aid;
+	SELECT
+    	*
+	FROM
+		demo.tbl1 aaa
+		JOIN demo.tbl2 bbb ON aaa.id = bbb.aid;
 	`
 
 	result, err := pg_query.Parse(sql)
@@ -24,17 +34,18 @@ func main() {
 		panic(err)
 	}
 
-	for _, v := range result.Stmts[0].Stmt.GetSelectStmt().GetFromClause() {
-		// fmt.Printf("GetFromClause %+v\n", v)
+	m := make(map[string]*RelationShip)
+	for _, v := range result.Stmts {
+		for _, vv := range v.Stmt.GetSelectStmt().GetFromClause() {
+			// fmt.Printf("GetFromClause %+v\n", v)
 
-		joinRel := parseJoinClause(v, make(map[string]*Relation))
-		// fmt.Printf("parseJoinClause res %+v\n", joinRel)
+			plan := parseJoinClause(vv, make(map[string]*Relation))
+			// fmt.Printf("parseJoinClause res %+v\n", plan)
 
-		r := joinRel.GetRelationShip()
-		fmt.Printf("MergeMap res %+v\n", r)
-
+			m = MergeMap(m, plan.GetRelationShip())
+		}
 	}
-
+	fmt.Printf("GetRelationShip: #%d\n", len(m))
 }
 
 type Relation struct {
