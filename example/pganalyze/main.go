@@ -193,7 +193,7 @@ func main() {
 	for _, v := range result.Stmts {
 		aliasMap := make(map[string]*Relation)
 
-		// TODO:解析 CTE
+		// 解析 CTE
 		r0 := parseWithClause(v.Stmt.GetSelectStmt().GetWithClause(), aliasMap)
 		m = MergeMap(m, r0)
 
@@ -212,11 +212,8 @@ func main() {
 
 	counter := 0
 	for _, vv := range m {
-		// filter...
-		// if vv.SColumn == nil || vv.TColumn == nil || vv.SColumn.Schema == "" || vv.TColumn.Schema == "" {
-		// 	continue
-		// }
-		if vv.ToString() == "" {
+		// 过滤掉临时表
+		if vv.SColumn == nil || vv.TColumn == nil || vv.SColumn.Schema == "" || vv.TColumn.Schema == "" {
 			continue
 		}
 		counter += 1
@@ -245,7 +242,8 @@ func parseWithClause(withClause *pg_query.WithClause, aliasMap map[string]*Relat
 
 		// 记录 CTE 的 Alias
 		r := &Relation{
-			Alias: v.GetCommonTableExpr().GetCtename(),
+			Alias:   v.GetCommonTableExpr().GetCtename(),
+			RelName: v.GetCommonTableExpr().GetCtename(),
 		}
 		aliasMap[r.Alias] = r
 	}
@@ -281,20 +279,12 @@ func (r *RelationShip) ToString() string {
 	var sDisplayName, tDisplayName string
 
 	if r.SColumn.Schema == "" {
-		if r.SColumn.RelName == "" {
-			sDisplayName = r.SColumn.Alias
-		} else {
-			sDisplayName = r.SColumn.RelName
-		}
+		sDisplayName = r.SColumn.RelName
 	} else {
 		sDisplayName = fmt.Sprintf("%s.%s", r.SColumn.Schema, r.SColumn.RelName)
 	}
 	if r.TColumn.Schema == "" {
-		if r.TColumn.RelName == "" {
-			tDisplayName = r.TColumn.Alias
-		} else {
-			tDisplayName = r.TColumn.RelName
-		}
+		tDisplayName = r.TColumn.RelName
 	} else {
 		tDisplayName = fmt.Sprintf("%s.%s", r.TColumn.Schema, r.TColumn.RelName)
 	}
@@ -375,7 +365,7 @@ func parseSubLink(node *pg_query.SubLink, jointype pg_query.JoinType, aliasMap m
 	// case :
 	// 扩展...
 	default:
-		fmt.Println(fmt.Sprintf("%s", node.GetSubLinkType()))
+		fmt.Printf("node.GetSubLinkType(): %s", node.GetSubLinkType())
 	}
 
 	return relationShip
@@ -440,7 +430,8 @@ func parseJoinClause(node *pg_query.Node, aliasMap map[string]*Relation) map[str
 
 		// 记录 SubQuery 的 Alias
 		r := &Relation{
-			Alias: j.GetLarg().GetRangeSubselect().GetAlias().GetAliasname(),
+			Alias:   j.GetLarg().GetRangeSubselect().GetAlias().GetAliasname(),
+			RelName: j.GetLarg().GetRangeSubselect().GetAlias().GetAliasname(),
 		}
 		aliasMap[r.Alias] = r
 	}
@@ -457,7 +448,8 @@ func parseJoinClause(node *pg_query.Node, aliasMap map[string]*Relation) map[str
 
 		// 记录 SubQuery 的 Alias
 		r := &Relation{
-			Alias: j.GetRarg().GetRangeSubselect().GetAlias().GetAliasname(),
+			Alias:   j.GetRarg().GetRangeSubselect().GetAlias().GetAliasname(),
+			RelName: j.GetRarg().GetRangeSubselect().GetAlias().GetAliasname(),
 		}
 		aliasMap[r.Alias] = r
 	}
