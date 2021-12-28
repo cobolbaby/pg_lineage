@@ -184,13 +184,27 @@ func main() {
 	// }
 	// fmt.Println(resultJson)
 
+	m := make(map[string]*RelationShip)
+
+	// 解析sql，暂时不支持 PL/pgSQL
 	result, err := pg_query.Parse(sql)
 	if err != nil {
 		panic(err)
 	}
 
-	m := make(map[string]*RelationShip)
 	for _, v := range result.Stmts {
+		// TODO:判断为哪种类型SQL
+		// truncate 跳过
+		// drop   跳过
+		// vacuum 跳过
+		// analyz 跳过
+		// alter  跳过
+		// insert 解析其中的 select 子句
+		// delete 仅解析关联删除
+		// update 仅解析关联更新
+		// create 解析其中的 select 子句
+		// select 已经解析
+
 		aliasMap := make(map[string]*Relation)
 
 		// 解析 CTE
