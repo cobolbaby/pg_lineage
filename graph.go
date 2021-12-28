@@ -18,7 +18,7 @@ func ResetGraph(driver neo4j.Driver) error {
 	defer session.Close()
 
 	_, err := session.WriteTransaction(func(tx neo4j.Transaction) (interface{}, error) {
-		return tx.Run("MATCH (n) DETACH DELETE n", nil)
+		return tx.Run("MATCH (n:Lineage) DETACH DELETE n", nil)
 	})
 
 	return err
