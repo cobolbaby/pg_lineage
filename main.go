@@ -98,41 +98,49 @@ func main() {
 	}
 	defer querys.Close()
 
+	m := make(map[string]*sqlparser.RelationShip)
+
 	for querys.Next() {
 
 		var qs QueryStore
 		_ = querys.Scan(&qs.Query, &qs.Calls, &qs.TotalTime, &qs.MinTime, &qs.MaxTime, &qs.MeanTime)
 
 		// generateTableLineage(&qs, ds, driver)
-		generateTableJoinRelation(&qs, ds, driver)
+		m = sqlparser.MergeMap(m, generateTableJoinRelation(&qs, ds, driver))
 
 		// 扩展别的图.
+	}
+
+	// 写库...
+	fmt.Printf("GetRelationShip: #%d\n", len(m))
+	for _, v := range m {
+		fmt.Printf("%s\n", v.ToString())
 	}
 
 }
 
 // 生成一张 JOIN 图
 // 可以推导出关联关系的有 IN / JOIN
-func generateTableJoinRelation(qs *QueryStore, ds *DataSource, driver neo4j.Driver) {
+func generateTableJoinRelation(qs *QueryStore, ds *DataSource, driver neo4j.Driver) map[string]*sqlparser.RelationShip {
 
 	// 跳过 udf
 	if _, err := lineage.IdentifyFuncCall(qs.Query); err == nil {
-		return
+		return nil
 	}
 	log.Debugf("generateTableJoinRelation sql: %s", qs.Query)
 
 	m, _ := sqlparser.Parse(qs.Query)
+	n := make(map[string]*sqlparser.RelationShip)
 
-	counter := 0
-	for _, vv := range m {
+	for kk, vv := range m {
 		// 过滤掉临时表
 		if vv.SColumn == nil || vv.TColumn == nil || vv.SColumn.Schema == "" || vv.TColumn.Schema == "" {
 			continue
 		}
-		counter += 1
-		fmt.Printf("[%d] %s\n", counter, vv.ToString())
+		n[kk] = vv
 	}
 
+	return n
 }
 
 // 生成表血缘关系图
