@@ -2,11 +2,14 @@ package main
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/url"
 	"regexp"
 	"strings"
 
+	sqlparser "github.com/cobolbaby/lineage/internal/erd"
+	"github.com/cobolbaby/lineage/internal/lineage"
 	"github.com/cobolbaby/lineage/pkg/depgraph"
 	"github.com/cobolbaby/lineage/pkg/log"
 	_ "github.com/lib/pq"
@@ -35,6 +38,8 @@ var (
 			s.mean_time DESC
 		Limit 500;
 	`
+	PG_FuncCallPattern1 = regexp.MustCompile(`(?i)(select|call)\s+(\w+)\.(\w+)\((.*)\)\s*(;)?`)
+	PG_FuncCallPattern2 = regexp.MustCompile(`(?i)select\s+(.*)from\s+(\w+)\.(\w+)\((.*)\)\s*(as\s+(.*))?\s*(;)?`)
 )
 
 type DataSource struct {
@@ -85,7 +90,7 @@ func main() {
 	defer driver.Close()
 
 	// 每次都是重建整张图，避免重复写入，后期可以考虑优化
-	if err := ResetGraph(driver); err != nil {
+	if err := lineage.ResetGraph(driver); err != nil {
 		log.Fatal("ResetGraph err: ", err)
 	}
 
@@ -96,40 +101,52 @@ func main() {
 	}
 	defer querys.Close()
 
+	m := make(map[string]*sqlparser.RelationShip)
+
 	for querys.Next() {
 
 		var qs QueryStore
 		_ = querys.Scan(&qs.Query, &qs.Calls, &qs.TotalTime, &qs.MinTime, &qs.MaxTime, &qs.MeanTime)
 
-		if false {
-			generateTableLineage(&qs, ds, driver)
-		}
+		// 生成血缘图，因为图里面边的信息附带了udf属性，所以不能一次性往图数据库里面写入
+		// generateTableLineage(&qs, ds, driver)
 
-		if true {
-			generateTableJoinRelation(&qs, ds, driver)
-		}
+		// 为了减少不必要的写入冲突，在写入前依赖 MAP 特性做一次去重
+		m = sqlparser.MergeMap(m, generateTableJoinRelation(&qs, ds, driver))
 
 		// 扩展别的图.
+	}
+
+	// 写库...
+	fmt.Printf("GetRelationShip: #%d\n", len(m))
+	for _, v := range m {
+		fmt.Printf("%s\n", v.ToString())
 	}
 
 }
 
 // 生成一张 JOIN 图
 // 可以推导出关联关系的有 IN / JOIN
-func generateTableJoinRelation(qs *QueryStore, ds *DataSource, driver neo4j.Driver) {
+func generateTableJoinRelation(qs *QueryStore, ds *DataSource, driver neo4j.Driver) map[string]*sqlparser.RelationShip {
 
 	// 跳过 udf
 	if _, err := IdentifyFuncCall(qs.Query); err == nil {
-		return
+		return nil
 	}
-	log.Infof("generateTableJoinRelation sql: %s", qs.Query)
+	log.Debugf("generateTableJoinRelation sql: %s", qs.Query)
 
-	// 解析 sql 语句中的 join，如果没有则直接返回
-	// sqlTree := depgraph.New(ds.Alias)
-	// ParseSQL(sqlTree, qs.Query)
+	m, _ := sqlparser.Parse(qs.Query)
+	n := make(map[string]*sqlparser.RelationShip)
 
-	// 依据上面返回的 join 关系，生成一张图
-	// 节点：表名; 关系：Join
+	for kk, vv := range m {
+		// 过滤掉临时表
+		if vv.SColumn == nil || vv.TColumn == nil || vv.SColumn.Schema == "" || vv.TColumn.Schema == "" {
+			continue
+		}
+		n[kk] = vv
+	}
+
+	return n
 }
 
 // 生成表血缘关系图
@@ -159,13 +176,40 @@ func generateTableLineage(qs *QueryStore, ds *DataSource, driver neo4j.Driver) {
 
 	// TODO:完善辅助信息
 
-	if err := CreateGraph(driver, sqlTree.ShrinkGraph(), udf); err != nil {
+	if err := lineage.CreateGraph(driver, sqlTree.ShrinkGraph(), udf); err != nil {
 		log.Errorf("UDF CreateGraph err: %s ", err)
 	}
 }
 
+func IdentifyFuncCall(sql string) (*lineage.Op, error) {
+
+	// 正则匹配，忽略大小写
+	// select dw.func_insert_xxxx(a,b)
+	// select * from report.query_xxxx(1,2,3)
+	// call dw.func_insert_xxxx(a,b)
+
+	if r := PG_FuncCallPattern1.FindStringSubmatch(sql); r != nil {
+		log.Debug("FuncCallPattern1:", r[1], r[2], r[3])
+		return &lineage.Op{
+			Type:       "plpgsql",
+			SchemaName: r[2],
+			ProcName:   r[3],
+		}, nil
+	}
+	if r := PG_FuncCallPattern2.FindStringSubmatch(sql); r != nil {
+		log.Debug("FuncCallPattern2:", r[1], r[2], r[3])
+		return &lineage.Op{
+			Type:       "plpgsql",
+			SchemaName: r[2],
+			ProcName:   r[3],
+		}, nil
+	}
+
+	return nil, errors.New("not a function call")
+}
+
 // 解析函数调用
-func HandleUDF(sqlTree *depgraph.Graph, db *sql.DB, udf *Op) error {
+func HandleUDF(sqlTree *depgraph.Graph, db *sql.DB, udf *lineage.Op) error {
 	log.Infof("HandleUDF: %s.%s", udf.SchemaName, udf.ProcName)
 
 	// 排除系统函数的干扰 e.g. select now()
@@ -184,7 +228,7 @@ func HandleUDF(sqlTree *depgraph.Graph, db *sql.DB, udf *Op) error {
 	plpgsql := filterUnhandledCommands(definition)
 	// log.Debug("plpgsql: ", plpgsql)
 
-	if err := ParseUDF(sqlTree, plpgsql); err != nil {
+	if err := lineage.ParseUDF(sqlTree, plpgsql); err != nil {
 		log.Errorf("ParseUDF %+v, err: %s", udf, err)
 		return err
 	}
@@ -198,7 +242,7 @@ func filterUnhandledCommands(content string) string {
 }
 
 // 获取相关定义
-func GetUDFDefinition(db *sql.DB, udf *Op) (string, error) {
+func GetUDFDefinition(db *sql.DB, udf *lineage.Op) (string, error) {
 
 	rows, err := db.Query(fmt.Sprintf(PLPGSQL_GET_FUNC_DEFINITION, udf.SchemaName, udf.ProcName))
 	if err != nil {

@@ -1,4 +1,4 @@
-package main
+package lineage
 
 import (
 	"errors"
@@ -20,6 +20,11 @@ var (
 		"PLpgSQL_stmt_dynexecute": true, // 比较复杂，不太好支持
 		"PLpgSQL_stmt_perform":    true, // 暂不支持
 	}
+)
+
+const (
+	REL_PERSIST     = "p"
+	REL_PERSIST_NOT = "t"
 )
 
 type Owner struct {
@@ -91,11 +96,6 @@ func (o *Op) GetID() string {
 	return o.SchemaName + "." + o.ProcName
 }
 
-const (
-	REL_PERSIST     = "p"
-	REL_PERSIST_NOT = "t"
-)
-
 func ParseUDF(sqlTree *depgraph.Graph, plpgsql string) error {
 
 	raw, err := pg_query.ParsePlPgSqlToJSON(plpgsql)
@@ -162,6 +162,7 @@ func ParseSQL(sqlTree *depgraph.Graph, sql string) error {
 	}
 	// log.Debugf("%s: %s\n", sql, raw)
 
+	// https://github.com/tidwall/gjson#path-syntax
 	stmts := gjson.Get(raw, "stmts.#.stmt").Array()
 	for _, v := range stmts {
 
@@ -443,75 +444,4 @@ func parseJoinClause(v gjson.Result) []*Record {
 	}
 
 	return records
-}
-
-func IdentifyFuncCall(sql string) (*Op, error) {
-	log.Debugf("IdentifyFuncCall %s", sql)
-
-	var records *Op
-
-	raw, _ := pg_query.ParseToJSON(sql)
-	stmts := gjson.Get(raw, "stmts.#.stmt").Array()
-	for _, v := range stmts {
-
-		// 支持通过 select 方式调用
-		if v.Get("SelectStmt").Exists() {
-
-			// 形如 select dw.func_insert_xxxx(a,b)
-			// fix: 只匹配不含 from 的 select 语句，避免 select count(1) from tbl 等 SQL 的干扰
-			if !v.Get("SelectStmt.fromClause").Exists() {
-				targetList := v.Get("SelectStmt.targetList").Array()
-				if len(targetList) == 1 && targetList[0].Get("ResTarget.val.FuncCall").Exists() {
-					records = parseFuncCall(targetList[0].Get("ResTarget.val"))
-					break
-				}
-			}
-
-			// 形如 select * from report.query_xxxx(1,2,3)
-			fromClause := v.Get("SelectStmt.fromClause").Array()
-			for _, vv := range fromClause {
-
-				if vv.Get("RangeFunction").Exists() {
-					// https://github.com/tidwall/gjson#path-syntax
-					udfs := vv.Get("RangeFunction.functions.#.List.items").Array()
-
-					// 只取第一个函数
-					records = parseFuncCall(udfs[0].Array()[0])
-					break
-				}
-			}
-		}
-
-		// 支持通过 call 方式调用
-	}
-
-	if records == nil {
-		return nil, errors.New("not a function call")
-	}
-	return records, nil
-}
-
-func parseFuncCall(v gjson.Result) *Op {
-	if !v.Get("FuncCall").Exists() {
-		return nil
-	}
-
-	funcname := v.Get("FuncCall.funcname.#.String.str").Array()
-
-	if len(funcname) == 2 {
-		return &Op{
-			ProcName:   funcname[1].String(),
-			SchemaName: funcname[0].String(),
-			Type:       "plpgsql",
-		}
-	}
-	if len(funcname) == 1 {
-		return &Op{
-			ProcName:   funcname[0].String(),
-			SchemaName: "",
-			Type:       "plpgsql",
-		}
-	}
-
-	return nil
 }
