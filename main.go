@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/url"
 	"regexp"
@@ -37,6 +38,8 @@ var (
 			s.mean_time DESC
 		Limit 500;
 	`
+	PG_FuncCallPattern1 = regexp.MustCompile(`(?i)(select|call)\s+(\w+)\.(\w+)\((.*)\)\s*(;)?`)
+	PG_FuncCallPattern2 = regexp.MustCompile(`(?i)select\s+(.*)from\s+(\w+)\.(\w+)\((.*)\)\s*(as\s+(.*))?\s*(;)?`)
 )
 
 type DataSource struct {
@@ -127,7 +130,7 @@ func main() {
 func generateTableJoinRelation(qs *QueryStore, ds *DataSource, driver neo4j.Driver) map[string]*sqlparser.RelationShip {
 
 	// 跳过 udf
-	if _, err := lineage.IdentifyFuncCall(qs.Query); err == nil {
+	if _, err := IdentifyFuncCall(qs.Query); err == nil {
 		return nil
 	}
 	log.Debugf("generateTableJoinRelation sql: %s", qs.Query)
@@ -152,7 +155,7 @@ func generateTableLineage(qs *QueryStore, ds *DataSource, driver neo4j.Driver) {
 	// 一个 UDF 一张图
 	sqlTree := depgraph.New(ds.Alias)
 
-	udf, err := lineage.IdentifyFuncCall(qs.Query)
+	udf, err := IdentifyFuncCall(qs.Query)
 	if err != nil {
 		return
 	}
@@ -176,6 +179,33 @@ func generateTableLineage(qs *QueryStore, ds *DataSource, driver neo4j.Driver) {
 	if err := lineage.CreateGraph(driver, sqlTree.ShrinkGraph(), udf); err != nil {
 		log.Errorf("UDF CreateGraph err: %s ", err)
 	}
+}
+
+func IdentifyFuncCall(sql string) (*lineage.Op, error) {
+
+	// 正则匹配，忽略大小写
+	// select dw.func_insert_xxxx(a,b)
+	// select * from report.query_xxxx(1,2,3)
+	// call dw.func_insert_xxxx(a,b)
+
+	if r := PG_FuncCallPattern1.FindStringSubmatch(sql); r != nil {
+		log.Debug("FuncCallPattern1:", r[1], r[2], r[3])
+		return &lineage.Op{
+			Type:       "plpgsql",
+			SchemaName: r[2],
+			ProcName:   r[3],
+		}, nil
+	}
+	if r := PG_FuncCallPattern2.FindStringSubmatch(sql); r != nil {
+		log.Debug("FuncCallPattern2:", r[1], r[2], r[3])
+		return &lineage.Op{
+			Type:       "plpgsql",
+			SchemaName: r[2],
+			ProcName:   r[3],
+		}, nil
+	}
+
+	return nil, errors.New("not a function call")
 }
 
 // 解析函数调用
