@@ -36,7 +36,7 @@ var (
 			AND calls > 10
 		ORDER BY
 			s.mean_time DESC
-		Limit 500;
+		Limit 1000;
 	`
 	PG_FuncCallPattern1 = regexp.MustCompile(`(?i)(select|call)\s+(\w+)\.(\w+)\((.*)\)\s*(;)?`)
 	PG_FuncCallPattern2 = regexp.MustCompile(`(?i)select\s+(.*)from\s+(\w+)\.(\w+)\((.*)\)\s*(as\s+(.*))?\s*(;)?`)
@@ -121,6 +121,9 @@ func main() {
 	fmt.Printf("GetRelationShip: #%d\n", len(m))
 	for _, v := range m {
 		fmt.Printf("%s\n", v.ToString())
+	}
+	if err := sqlparser.CreateGraph(driver, m); err != nil {
+		log.Errorf("ERD err: %s ", err)
 	}
 
 }
