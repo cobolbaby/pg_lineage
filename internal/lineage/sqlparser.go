@@ -1,4 +1,4 @@
-package main
+package lineage
 
 import (
 	"errors"
@@ -20,6 +20,11 @@ var (
 		"PLpgSQL_stmt_dynexecute": true, // 比较复杂，不太好支持
 		"PLpgSQL_stmt_perform":    true, // 暂不支持
 	}
+)
+
+const (
+	REL_PERSIST     = "p"
+	REL_PERSIST_NOT = "t"
 )
 
 type Owner struct {
@@ -90,11 +95,6 @@ func (o *Op) GetID() string {
 	}
 	return o.SchemaName + "." + o.ProcName
 }
-
-const (
-	REL_PERSIST     = "p"
-	REL_PERSIST_NOT = "t"
-)
 
 func ParseUDF(sqlTree *depgraph.Graph, plpgsql string) error {
 

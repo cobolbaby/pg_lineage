@@ -21,9 +21,9 @@ func main() {
 	left join fis.pca_pca_cust_sno  c  on  t.barcode = c.custsno and  c.type  in('CUST_SN','DES_TX_SNO' ) and c.inuse='1'
 	`
 
-	m := make(map[string]*sqlparser.RelationShip)
+	// m := make(map[string]*sqlparser.RelationShip)
 
-	m, _ = sqlparser.Parse(sql)
+	m, _ := sqlparser.Parse(sql)
 
 	counter := 0
 	for _, vv := range m {

@@ -7,8 +7,10 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/cobolbaby/lineage/internal/lineage"
 	"github.com/cobolbaby/lineage/pkg/depgraph"
 	"github.com/cobolbaby/lineage/pkg/log"
+	sqlparser "github.com/cobolbaby/lineage/pkg/sqlparser4join"
 	_ "github.com/lib/pq"
 	"github.com/neo4j/neo4j-go-driver/v4/neo4j"
 )
@@ -85,7 +87,7 @@ func main() {
 	defer driver.Close()
 
 	// 每次都是重建整张图，避免重复写入，后期可以考虑优化
-	if err := ResetGraph(driver); err != nil {
+	if err := lineage.ResetGraph(driver); err != nil {
 		log.Fatal("ResetGraph err: ", err)
 	}
 
@@ -101,13 +103,8 @@ func main() {
 		var qs QueryStore
 		_ = querys.Scan(&qs.Query, &qs.Calls, &qs.TotalTime, &qs.MinTime, &qs.MaxTime, &qs.MeanTime)
 
-		if false {
-			generateTableLineage(&qs, ds, driver)
-		}
-
-		if true {
-			generateTableJoinRelation(&qs, ds, driver)
-		}
+		// generateTableLineage(&qs, ds, driver)
+		generateTableJoinRelation(&qs, ds, driver)
 
 		// 扩展别的图.
 	}
@@ -119,17 +116,23 @@ func main() {
 func generateTableJoinRelation(qs *QueryStore, ds *DataSource, driver neo4j.Driver) {
 
 	// 跳过 udf
-	if _, err := IdentifyFuncCall(qs.Query); err == nil {
+	if _, err := lineage.IdentifyFuncCall(qs.Query); err == nil {
 		return
 	}
 	log.Infof("generateTableJoinRelation sql: %s", qs.Query)
 
-	// 解析 sql 语句中的 join，如果没有则直接返回
-	// sqlTree := depgraph.New(ds.Alias)
-	// ParseSQL(sqlTree, qs.Query)
+	m, _ := sqlparser.Parse(qs.Query)
 
-	// 依据上面返回的 join 关系，生成一张图
-	// 节点：表名; 关系：Join
+	counter := 0
+	for _, vv := range m {
+		// 过滤掉临时表
+		if vv.SColumn == nil || vv.TColumn == nil || vv.SColumn.Schema == "" || vv.TColumn.Schema == "" {
+			continue
+		}
+		counter += 1
+		fmt.Printf("[%d] %s\n", counter, vv.ToString())
+	}
+
 }
 
 // 生成表血缘关系图
@@ -138,7 +141,7 @@ func generateTableLineage(qs *QueryStore, ds *DataSource, driver neo4j.Driver) {
 	// 一个 UDF 一张图
 	sqlTree := depgraph.New(ds.Alias)
 
-	udf, err := IdentifyFuncCall(qs.Query)
+	udf, err := lineage.IdentifyFuncCall(qs.Query)
 	if err != nil {
 		return
 	}
@@ -159,13 +162,13 @@ func generateTableLineage(qs *QueryStore, ds *DataSource, driver neo4j.Driver) {
 
 	// TODO:完善辅助信息
 
-	if err := CreateGraph(driver, sqlTree.ShrinkGraph(), udf); err != nil {
+	if err := lineage.CreateGraph(driver, sqlTree.ShrinkGraph(), udf); err != nil {
 		log.Errorf("UDF CreateGraph err: %s ", err)
 	}
 }
 
 // 解析函数调用
-func HandleUDF(sqlTree *depgraph.Graph, db *sql.DB, udf *Op) error {
+func HandleUDF(sqlTree *depgraph.Graph, db *sql.DB, udf *lineage.Op) error {
 	log.Infof("HandleUDF: %s.%s", udf.SchemaName, udf.ProcName)
 
 	// 排除系统函数的干扰 e.g. select now()
@@ -184,7 +187,7 @@ func HandleUDF(sqlTree *depgraph.Graph, db *sql.DB, udf *Op) error {
 	plpgsql := filterUnhandledCommands(definition)
 	// log.Debug("plpgsql: ", plpgsql)
 
-	if err := ParseUDF(sqlTree, plpgsql); err != nil {
+	if err := lineage.ParseUDF(sqlTree, plpgsql); err != nil {
 		log.Errorf("ParseUDF %+v, err: %s", udf, err)
 		return err
 	}
@@ -198,7 +201,7 @@ func filterUnhandledCommands(content string) string {
 }
 
 // 获取相关定义
-func GetUDFDefinition(db *sql.DB, udf *Op) (string, error) {
+func GetUDFDefinition(db *sql.DB, udf *lineage.Op) (string, error) {
 
 	rows, err := db.Query(fmt.Sprintf(PLPGSQL_GET_FUNC_DEFINITION, udf.SchemaName, udf.ProcName))
 	if err != nil {
