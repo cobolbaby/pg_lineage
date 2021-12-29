@@ -7,10 +7,10 @@ import (
 	"regexp"
 	"strings"
 
+	sqlparser "github.com/cobolbaby/lineage/internal/erd"
 	"github.com/cobolbaby/lineage/internal/lineage"
 	"github.com/cobolbaby/lineage/pkg/depgraph"
 	"github.com/cobolbaby/lineage/pkg/log"
-	sqlparser "github.com/cobolbaby/lineage/pkg/sqlparser4join"
 	_ "github.com/lib/pq"
 	"github.com/neo4j/neo4j-go-driver/v4/neo4j"
 )
@@ -105,7 +105,10 @@ func main() {
 		var qs QueryStore
 		_ = querys.Scan(&qs.Query, &qs.Calls, &qs.TotalTime, &qs.MinTime, &qs.MaxTime, &qs.MeanTime)
 
+		// 生成血缘图，因为图里面边的信息附带了udf属性，所以不能一次性往图数据库里面写入
 		// generateTableLineage(&qs, ds, driver)
+
+		// 为了减少不必要的写入冲突，在写入前依赖 MAP 特性做一次去重
 		m = sqlparser.MergeMap(m, generateTableJoinRelation(&qs, ds, driver))
 
 		// 扩展别的图.

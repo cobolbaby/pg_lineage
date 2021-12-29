@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 
-	sqlparser "github.com/cobolbaby/lineage/pkg/sqlparser4join"
+	sqlparser "github.com/cobolbaby/lineage/internal/erd"
 )
 
 func main() {

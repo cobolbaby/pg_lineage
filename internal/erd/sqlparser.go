@@ -1,4 +1,4 @@
-package sqlparser4join
+package erd
 
 import (
 	"crypto/md5"
