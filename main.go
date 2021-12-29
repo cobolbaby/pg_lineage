@@ -119,7 +119,7 @@ func generateTableJoinRelation(qs *QueryStore, ds *DataSource, driver neo4j.Driv
 	if _, err := lineage.IdentifyFuncCall(qs.Query); err == nil {
 		return
 	}
-	log.Infof("generateTableJoinRelation sql: %s", qs.Query)
+	log.Debugf("generateTableJoinRelation sql: %s", qs.Query)
 
 	m, _ := sqlparser.Parse(qs.Query)
 

@@ -119,12 +119,12 @@ func parseSelectStmt(selectStmt *pg_query.SelectStmt) map[string]*RelationShip {
 }
 
 func parseDeleteStmt(deleteStmt *pg_query.DeleteStmt) map[string]*RelationShip {
-	fmt.Printf("parseDeleteStmt: %s\n", deleteStmt)
+	// fmt.Printf("parseDeleteStmt: %s\n", deleteStmt)
 	return nil
 }
 
 func parseUpdateStmt(updateStmt *pg_query.UpdateStmt) map[string]*RelationShip {
-	fmt.Printf("parseUpdateStmt: %s\n", updateStmt)
+	// fmt.Printf("parseUpdateStmt: %s\n", updateStmt)
 	return nil
 }
 
@@ -182,17 +182,18 @@ func parseWithClause(withClause *pg_query.WithClause, aliasMap map[string]*Relat
 }
 
 func parseFromClause(node *pg_query.Node, aliasMap map[string]*Relation) map[string]*RelationShip {
-	// 如果包含 JOIN
+	// 包含 JOIN
 	if node.GetJoinExpr() != nil {
 		return parseJoinClause(node, aliasMap)
 	}
 
-	// 如果包含 SubQuery 。。。
-
-	// 如果只是简单的一张表
+	// 只是简单的一张表
 	if node.GetRangeVar() != nil {
 		return parseRangeVar(node.GetRangeVar(), aliasMap)
 	}
+
+	// TODO:调用 UDF，获取返回值
+	// ...
 
 	return nil
 }
@@ -238,12 +239,18 @@ func parseSubLink(node *pg_query.SubLink, jointype pg_query.JoinType, aliasMap m
 }
 
 func parseAnySubLink(node *pg_query.SubLink, jointype pg_query.JoinType, aliasMap map[string]*Relation) map[string]*RelationShip {
-	// 跳过 func(name) IN (SELECT col FROM ...) 类似的SQL，变化太多，不考虑
+	// fmt.Printf("parseAnySubLink: %s", node)
+
+	// 跳过 func(alias.name) IN (SELECT col FROM ...) 类似的SQL，变化太多，不考虑
 	if node.GetTestexpr().GetFuncCall() != nil {
 		return nil
 	}
-	// 跳过 name IN (SELECT func(col) FROM ...)
+	// 跳过 alias.name IN (SELECT func(col) FROM ...)
 	if node.GetSubselect().GetSelectStmt().GetTargetList()[0].GetResTarget().GetVal().GetFuncCall() != nil {
+		return nil
+	}
+	// 跳过 name IN (SELECT col FROM ...)，字段不知道是哪个表的
+	if len(node.GetTestexpr().GetColumnRef().GetFields()) < 2 {
 		return nil
 	}
 
