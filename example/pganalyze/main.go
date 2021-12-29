@@ -11,170 +11,32 @@ import (
 func main() {
 
 	sql := `
-	with total as (
-		select 
-			total.*,
-			wc.data_value as wc,
-			op.data_value as opid
-		from fbt.fbt_opentest_detail_total total 
-			inner join fbt.fbt_opentest_detail_process_step_datarecords wc 
-				on total.transactionid = wc.transactionid 
-				and wc.name = 'workflow_id' 
-			inner join fbt.fbt_opentest_detail_process_step_datarecords op 
-				on total.transactionid = op.transactionid 
-				and op.name = 'op_id'
-		where 
-			--total.end_datetime between ('2021-12-27T20:04:11.881Z' at time zone 'Asia/Shanghai') and ('2021-12-28T08:04:11.881Z' at time zone 'Asia/Shanghai')
-			split_part(total.transactionid, '_', 3)::timestamp between ('2021-12-27T20:04:11.881Z' at time zone 'Asia/Shanghai') and ('2021-12-28T08:04:11.881Z' at time zone 'Asia/Shanghai')
-			--and wc.data_value <> 'ZTS'
-			--and op.data_value <> '9999998'
-	), modellist as (
-		select model from total group by model
-	), start as (
-		select 
-			result.*,
-			fis.family as fisfamily, 
-			fis.model as fismodel
-		from fbt.opentest_result result 
-			inner join fisf3.fis2_pca_model fis on fis_code = substring(sno,1,2)||substring(sno,5,1)
-		where 
-			teststatus = 'start' 
-			--and opid <> '9999998'
-			--and endtime between ('2021-12-27T20:04:11.881Z' at time zone 'Asia/Shanghai') and ('2021-12-28T08:04:11.881Z' at time zone 'Asia/Shanghai')
-			and split_part(result.transactionid, '_', 3)::timestamp between ('2021-12-27T20:04:11.881Z' at time zone 'Asia/Shanghai') and ('2021-12-28T08:04:11.881Z' at time zone 'Asia/Shanghai')
-	), done as (
-		select 
-			result.*,
-			fis.family as fisfamily, 
-			fis.model as fismodel
-		from fbt.opentest_result result 
-			inner join fisf3.fis2_pca_model fis on fis_code = substring(sno,1,2)||substring(sno,5,1)
-		where 
-			teststatus = 'done' 
-			--and opid <> '9999998'
-			--and endtime between ('2021-12-27T20:04:11.881Z' at time zone 'Asia/Shanghai') and ('2021-12-28T08:04:11.881Z' at time zone 'Asia/Shanghai')
-			and split_part(result.transactionid, '_', 3)::timestamp between ('2021-12-27T20:04:11.881Z' at time zone 'Asia/Shanghai') and ('2021-12-28T08:04:11.881Z' at time zone 'Asia/Shanghai')
-	), fislog as (
-		select 
-			map.fromid as transactionid, 
-			model.model, 
-			model.family, 
-			fislog.*
-		from 
-			fisf3.pca_sa_log fislog 
-			inner join (select distinct fromid, cdt from fisf3.pca_refid_mapping_log where wc in ('15', '20', '37', '3S')) map
-				on fislog.cdt = map.cdt 
-			inner join fisf3.pca_pca_sno sno
-				on fislog.mcbsno = sno.mcbsno 
-			inner join fisf3.fis2_pca_model model 
-				on sno.model = model.model
-		where 
-			fislog.wc in ('15', '20', '37', '3S','ZTS') 
-			--and fislog.cdt between ('2021-12-27T20:04:11.881Z' at time zone 'Asia/Shanghai') and ('2021-12-28T08:04:11.881Z' at time zone 'Asia/Shanghai')
-			and split_part(map.fromid, '_', 3)::timestamp between ('2021-12-27T20:04:11.881Z' at time zone 'Asia/Shanghai') and ('2021-12-28T08:04:11.881Z' at time zone 'Asia/Shanghai')
-			and model.model in (select model from modellist)
-	), transtable as (
-		select 
-			coalesce(total.transactionid, start.transactionid, fislog.transactionid)                                as transactionid,
-			split_part(coalesce(total.transactionid, start.transactionid, fislog.transactionid), '_', 1)            as mcbsno,
-			split_part(coalesce(total.transactionid, start.transactionid, fislog.transactionid), '_', 2)            as wc,
-			split_part(coalesce(total.transactionid, start.transactionid, fislog.transactionid), '_', 3)::timestamp as starttime
-		from 
-			total 
-			full outer join start on total.transactionid = start.transactionid 
-			full outer join fislog on coalesce(total.transactionid, start.transactionid) = fislog.transactionid 
-	), transtimes as (
-		select 
-			transactionid,
-			mcbsno,
-			wc,
-			starttime, 
-			--row_number() over (partition by mcbsno order by starttime) as trno
-			row_number() over (partition by mcbsno,wc order by starttime) as trno
-		from transtable 
-	), steps as ( --增加 symp
-		select 
-			steps.transactionid, 
-			to_char(steps.create_time,'yyyy-mm-dd hh24:mi:ss') as create_time,
-			steps.step_status,
-			steps.index_name,
-			steps.step_name,
-			steps.symptom_label,
-			wc.data_value as wc,
-			family.data_value as family,
-			model.data_value as model,
-			op.data_value as opid
-	   from fbt.fbt_opentest_detail_process_steps steps 
-			inner join fbt.fbt_opentest_detail_process_step_datarecords wc 
-				on steps.transactionid = wc.transactionid 
-				and wc.name = 'workflow_id' 
-			inner join fbt.fbt_opentest_detail_process_step_datarecords family
-				on steps.transactionid = family.transactionid 
-				and family.name = 'family'
-			inner join fbt.fbt_opentest_detail_process_step_datarecords model
-				on steps.transactionid = model.transactionid 
-				and model.name = 'model'
-			inner join fbt.fbt_opentest_detail_process_step_datarecords op
-				on steps.transactionid = op.transactionid 
-				and op.name = 'op_id'
-		where 
-			split_part(steps.transactionid, '_', 3)::timestamp between ('2021-12-27T20:04:11.881Z' at time zone 'Asia/Shanghai') and ('2021-12-28T08:04:11.881Z' at time zone 'Asia/Shanghai')
-			and steps.step_status <> 'PASSED'
-			and wc.data_value in ('15', '20', '37', '3S','ZTS') 
-			--and (op.data_value <> '9999998' or 'no' = 'no')
-		order by transactionid
-	), symp as (
-		select 
-			transactionid,
-			string_agg(index_name || step_name || ' ('|| symptoms ||') ', ' | ') as symp
-		from (
-			select 
-				transactionid,
-				index_name, 
-				step_name,
-				string_agg(symptom_label, '; ') as symptoms
-			from steps
-			group by transactionid, index_name, step_name
-			order by transactionid, index_name, step_name
-		) as steps_sym
-		group by transactionid
-		order by transactionid
+	with temptable as 
+	(  select r.mcbsno,s.family,s.model,r.desc_station as station,s.pdline,r.causecode,r.desc_cause as defect,r.location
+		,to_char(r.repcdt,'yyyy-mm-dd hh24:mi:dd') as test_date
+		from dw.fact_pca_rep  r
+		join dw.fact_pca_yield_unit  s on r.mcbsno=s.mcbsno and r.wc=s.wc and (r.rework = s.rework or r.repcdt=s.test_date or s.rework is null)
+		where s.verify_fail=1  
+		and r.is_transfered='N'   and trim(r.desc_station) in ( SELECT regexp_split_to_table('SMT_AOI(Side 1)',',') AS station)
+		and case when array['SUUNTO'] @>array['ALL'] then true  else s.family  in ( SELECT regexp_split_to_table('SUUNTO',',') ) end
+		and case when 'ALL'='ALL'  then true when 'ALL'='''ALL''' then true else s.model='ALL' end 
+		and  case when array['ALL'] @> array['ALL'] then true else s.pdline in ( SELECT regexp_split_to_table('ALL',',') AS line) end
+		---and case when ALL='ALL' then true when ALL='''ALL''' then true else r.pdline=ALL end
+		and s.test_date >= date_trunc('hour','2021-12-22T02:50:15Z' at time zone 'Asia/Shanghai' ) and  s.test_date< date_trunc('hour', ('2021-12-29T02:50:15Z' at time zone 'Asia/Shanghai')+interval '1 hour')
+		and case when 'MLB'='ALL' then true else s.board_type='MLB' end
+		and case when 'ALL'='ALL' then true when 'ALL'='MP' then s.newproduct='N' when 'ALL'='NPI-1' then s.newproduct='M' else s.newproduct='Y' end
+		and s.customer in ( SELECT regexp_split_to_table('F1',',') AS company)  
 	)
-	select 
-		transtimes.mcbsno                                                           as "Mcbsno",
-		transtimes.transactionid                                                    as "TransactionId",
-		transtimes.trno                                                             as "TrNo",
-		--coalesce(total.transactionid, start.transactionid, fislog.transactionid)    as "TransactionId",
-		coalesce(total.family, start.fisfamily, fislog.family)                      as "Family",
-		coalesce(total.model, start.fismodel, fislog.model)                         as "Model",
-		transtimes.wc                                                               as "WC",
-		--coalesce(total.wc, start.wc, fislog.wc)                                     as "WC",
-		case when start.transactionid is null then 'NoData' else 'Start' end        as "Start",
-		case when total.transactionid is null then 'NoData' else 'Log'   end        as "Log",
-		coalesce(fislog.ispass::text, 'NoData')                                     as "Fis",
-		--case when fislog.transactionid is null then 'NoData' else 'FIS'  end        as "Fis",
-		fislog.rework                                                               as "FisRewk",
-		case when total.status is null then 'NoData' else total.status   end        as "LogStatus",
-		symp.symp                                                                   as "ErrSteps",
-		total.start_datetime::timestamp at time zone 'asia/shanghai'                as "LogStarttime", 
-		total.end_datetime::timestamp at time zone 'asia/shanghai'                  as "LogEndtime" ,
-		coalesce(total.opid, start.opid, fislog.badgeno)                            as "OpId", 
-		coalesce(total.station_name, start.fixtureid, fislog.fixno)                 as "Fixture", 
-		done.exptime                                                                as "ResExpT"
-	from 
-		transtimes
-		left join total on transtimes.transactionid = total.transactionid
-		left join start on transtimes.transactionid = start.transactionid 
-		left join fislog on transtimes.transactionid = fislog.transactionid 
-		left join done on transtimes.transactionid = done.transactionid 
-		left join symp on transtimes.transactionid = symp.transactionid
-	where 
-		(coalesce(total.opid, start.opid, fislog.badgeno) <> '9999998' or 'no' = 'no')
-		and ('' = '' or symp.symp like '%'|| '' ||'%')
-		and transtimes.wc = '15'
-		and coalesce(total.family, start.fisfamily, fislog.family) in ('','DRAGONITE','MANDALORIAN','MANTINE','METAGROSS','RHYDON')
-		and coalesce(total.model, start.fismodel, fislog.model) in ('','1395T3064801','1395T3065201','1395T3204501','1395T3303504','1395T3318501','1395T3318601','1395T3318701','1395T3323303','1395T3323304')
-	order by transtimes.starttime desc 
+	select family,defect,failedqty,item from 
+	(
+	select family,defect,count(distinct mcbsno) as failedqty,'List' as item
+	from  temptable
+	group by family,defect
+	union ALL
+	select family,'ALL',count(distinct mcbsno) as failedqty,'ATotal' as item
+	from  temptable
+	group by family
+	) t order by family,item,failedqty desc;
 	`
 
 	// Debugger
@@ -193,35 +55,50 @@ func main() {
 	}
 
 	for _, v := range result.Stmts {
-		// TODO:判断为哪种类型SQL
+		// 判断为哪种类型SQL
 		// truncate 跳过
-		// drop   跳过
-		// vacuum 跳过
-		// analyz 跳过
-		// alter  跳过
-		// insert 解析其中的 select 子句
-		// delete 仅解析关联删除
-		// update 仅解析关联更新
-		// create 解析其中的 select 子句
-		// select 已经解析
+		// drop    跳过
+		// vacuum  跳过
+		// analyze 跳过
+		// create index 跳过
+		// insert  解析其中的 select 子句
+		// delete  仅解析关联删除
+		// update  仅解析关联更新
+		// create  解析其中的 select 子句
+		// select  已经解析
 
-		aliasMap := make(map[string]*Relation)
-
-		// 解析 CTE
-		r0 := parseWithClause(v.Stmt.GetSelectStmt().GetWithClause(), aliasMap)
-		m = MergeMap(m, r0)
-
-		// 解析 FROM 获取关系
-		// 从 FromClause 中获取 JoinExpr 信息，以便提炼关系
-		// 从 FromClause 中获取别名信息，可能在 WHERE 会用到
-		for _, vv := range v.Stmt.GetSelectStmt().GetFromClause() {
-			r1 := parseFromClause(vv, aliasMap)
-			m = MergeMap(m, r1)
+		if v.Stmt.GetTruncateStmt() != nil ||
+			v.Stmt.GetDropStmt() != nil ||
+			v.Stmt.GetVacuumStmt() != nil ||
+			v.Stmt.GetIndexStmt() != nil {
+			continue
 		}
 
-		// 解析 WHERE IN 获取关系
-		r2 := parseWhereClause(v.Stmt.GetSelectStmt().GetWhereClause(), aliasMap)
-		m = MergeMap(m, r2)
+		if v.Stmt.GetCreateTableAsStmt() != nil {
+			r := parseSelectStmt(v.Stmt.GetCreateTableAsStmt().GetQuery().GetSelectStmt())
+			m = MergeMap(m, r)
+			continue
+		}
+		if v.Stmt.GetSelectStmt() != nil {
+			r := parseSelectStmt(v.Stmt.GetSelectStmt())
+			m = MergeMap(m, r)
+			continue
+		}
+		if v.Stmt.GetInsertStmt() != nil {
+			r := parseSelectStmt(v.Stmt.GetInsertStmt().GetSelectStmt().GetSelectStmt())
+			m = MergeMap(m, r)
+			continue
+		}
+		if v.Stmt.GetDeleteStmt() != nil {
+			r := parseDeleteStmt(v.Stmt.GetDeleteStmt())
+			m = MergeMap(m, r)
+			continue
+		}
+		if v.Stmt.GetUpdateStmt() != nil {
+			r := parseUpdateStmt(v.Stmt.GetUpdateStmt())
+			m = MergeMap(m, r)
+			continue
+		}
 	}
 
 	counter := 0
@@ -237,32 +114,37 @@ func main() {
 
 }
 
-func parseWithClause(withClause *pg_query.WithClause, aliasMap map[string]*Relation) map[string]*RelationShip {
+func parseSelectStmt(selectStmt *pg_query.SelectStmt) map[string]*RelationShip {
+	aliasMap := make(map[string]*Relation)
 	m := make(map[string]*RelationShip)
 
-	for _, v := range withClause.GetCtes() {
+	// 解析 CTE
+	r0 := parseWithClause(selectStmt.GetWithClause(), aliasMap)
+	m = MergeMap(m, r0)
 
-		// 解析 FROM 获取关系
-		// 从 FromClause 中获取 JoinExpr 信息，以便提炼关系
-		// 从 FromClause 中获取别名信息，可能在 WHERE 会用到
-		for _, vv := range v.GetCommonTableExpr().GetCtequery().GetSelectStmt().GetFromClause() {
-			r1 := parseFromClause(vv, aliasMap)
-			m = MergeMap(m, r1)
-		}
-
-		// 解析 WHERE IN 获取关系
-		r2 := parseWhereClause(v.GetCommonTableExpr().GetCtequery().GetSelectStmt().GetWhereClause(), aliasMap)
-		m = MergeMap(m, r2)
-
-		// 记录 CTE 的 Alias
-		r := &Relation{
-			Alias:   v.GetCommonTableExpr().GetCtename(),
-			RelName: v.GetCommonTableExpr().GetCtename(),
-		}
-		aliasMap[r.Alias] = r
+	// 解析 FROM 获取关系
+	// 从 FromClause 中获取 JoinExpr 信息，以便提炼关系
+	// 从 FromClause 中获取别名信息，可能在 WHERE 会用到
+	for _, vv := range selectStmt.GetFromClause() {
+		r1 := parseFromClause(vv, aliasMap)
+		m = MergeMap(m, r1)
 	}
 
+	// 解析 WHERE IN 获取关系
+	r2 := parseWhereClause(selectStmt.GetWhereClause(), aliasMap)
+	m = MergeMap(m, r2)
+
 	return m
+}
+
+func parseDeleteStmt(deleteStmt *pg_query.DeleteStmt) map[string]*RelationShip {
+	fmt.Printf("parseDeleteStmt: %s\n", deleteStmt)
+	return nil
+}
+
+func parseUpdateStmt(updateStmt *pg_query.UpdateStmt) map[string]*RelationShip {
+	fmt.Printf("parseUpdateStmt: %s\n", updateStmt)
+	return nil
 }
 
 type Relation struct {
@@ -310,23 +192,32 @@ func (r *RelationShip) ToString() string {
 	)
 }
 
-type Record struct {
-	LRelation    *Relation
-	RRelation    *Relation
-	LSubQuery    *Record
-	RSubQuery    *Record
-	RelationShip map[string]*RelationShip
-}
+func parseWithClause(withClause *pg_query.WithClause, aliasMap map[string]*Relation) map[string]*RelationShip {
+	m := make(map[string]*RelationShip)
 
-func (records *Record) GetRelationShip() map[string]*RelationShip {
-	r := records.RelationShip
-	if records.LSubQuery != nil {
-		r = MergeMap(r, records.LSubQuery.GetRelationShip())
+	for _, v := range withClause.GetCtes() {
+
+		// 解析 FROM 获取关系
+		// 从 FromClause 中获取 JoinExpr 信息，以便提炼关系
+		// 从 FromClause 中获取别名信息，可能在 WHERE 会用到
+		for _, vv := range v.GetCommonTableExpr().GetCtequery().GetSelectStmt().GetFromClause() {
+			r1 := parseFromClause(vv, aliasMap)
+			m = MergeMap(m, r1)
+		}
+
+		// 解析 WHERE IN 获取关系
+		r2 := parseWhereClause(v.GetCommonTableExpr().GetCtequery().GetSelectStmt().GetWhereClause(), aliasMap)
+		m = MergeMap(m, r2)
+
+		// 记录 CTE 的 Alias
+		r := &Relation{
+			Alias:   v.GetCommonTableExpr().GetCtename(),
+			RelName: v.GetCommonTableExpr().GetCtename(),
+		}
+		aliasMap[r.Alias] = r
 	}
-	if records.RSubQuery != nil {
-		r = MergeMap(r, records.RSubQuery.GetRelationShip())
-	}
-	return r
+
+	return m
 }
 
 func parseFromClause(node *pg_query.Node, aliasMap map[string]*Relation) map[string]*RelationShip {
@@ -386,6 +277,15 @@ func parseSubLink(node *pg_query.SubLink, jointype pg_query.JoinType, aliasMap m
 }
 
 func parseAnySubLink(node *pg_query.SubLink, jointype pg_query.JoinType, aliasMap map[string]*Relation) map[string]*RelationShip {
+	// 跳过 func(name) IN (SELECT col FROM ...) 类似的SQL，变化太多，不考虑
+	if node.GetTestexpr().GetFuncCall() != nil {
+		return nil
+	}
+	// 跳过 name IN (SELECT func(col) FROM ...)
+	if node.GetSubselect().GetSelectStmt().GetTargetList()[0].GetResTarget().GetVal().GetFuncCall() != nil {
+		return nil
+	}
+
 	relationship := &RelationShip{}
 
 	lrel := aliasMap[node.GetTestexpr().GetColumnRef().GetFields()[0].GetString_().GetStr()]
@@ -533,6 +433,9 @@ func parseAExpr(expr *pg_query.A_Expr, joinType pg_query.JoinType, aliasMap map[
 		return nil
 	}
 	if r.GetAExpr() != nil { // col = 'v1' || 'v2'，那直接跳过
+		return nil
+	}
+	if r.GetFuncCall() != nil { // col = func(...)
 		return nil
 	}
 
