@@ -132,7 +132,7 @@ func main() {
 func generateTableJoinRelation(qs *QueryStore, ds *DataSource, driver neo4j.Driver) map[string]*erd.RelationShip {
 	log.Debugf("generateTableJoinRelation sql: %s", qs.Query)
 
-	var m, n map[string]*erd.RelationShip
+	var m map[string]*erd.RelationShip
 
 	if udf, err := IdentifyFuncCall(qs.Query); err == nil {
 		m, _ = HandleUDF4ERD(ds.DB, udf)
@@ -140,6 +140,7 @@ func generateTableJoinRelation(qs *QueryStore, ds *DataSource, driver neo4j.Driv
 		m, _ = erd.Parse(qs.Query)
 	}
 
+	n := make(map[string]*erd.RelationShip)
 	for kk, vv := range m {
 		// 过滤掉临时表
 		if vv.SColumn == nil || vv.TColumn == nil || vv.SColumn.Schema == "" || vv.TColumn.Schema == "" {
