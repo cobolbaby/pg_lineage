@@ -107,7 +107,6 @@ func ParseUDF(sqlTree *depgraph.Graph, plpgsql string) error {
 	v := gjson.Parse(raw).Array()[0]
 
 	for _, action := range v.Get("PLpgSQL_function.action.PLpgSQL_stmt_block.body").Array() {
-		// 遍历属性
 		action.ForEach(func(key, value gjson.Result) bool {
 			// 没有配置，或者屏蔽掉的
 			if enable, ok := PLPGSQL_BLACKLIST_STMTS[key.String()]; ok && enable {

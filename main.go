@@ -121,10 +121,6 @@ func main() {
 	}
 
 	// 一次性入库...
-	fmt.Printf("GetRelationShip: #%d\n", len(m))
-	for _, v := range m {
-		fmt.Printf("%s\n", v.ToString())
-	}
 	if err := erd.CreateGraph(driver, m); err != nil {
 		log.Errorf("ERD err: %s ", err)
 	}
@@ -134,15 +130,15 @@ func main() {
 // 生成一张 JOIN 图
 // 可以推导出关联关系的有 IN / JOIN
 func generateTableJoinRelation(qs *QueryStore, ds *DataSource, driver neo4j.Driver) map[string]*erd.RelationShip {
-
-	// 跳过 udf
-	if _, err := IdentifyFuncCall(qs.Query); err == nil {
-		return nil
-	}
 	log.Debugf("generateTableJoinRelation sql: %s", qs.Query)
 
-	m, _ := erd.Parse(qs.Query)
-	n := make(map[string]*erd.RelationShip)
+	var m, n map[string]*erd.RelationShip
+
+	if udf, err := IdentifyFuncCall(qs.Query); err == nil {
+		m, _ = HandleUDF4ERD(ds.DB, udf)
+	} else {
+		m, _ = erd.Parse(qs.Query)
+	}
 
 	for kk, vv := range m {
 		// 过滤掉临时表
@@ -150,6 +146,10 @@ func generateTableJoinRelation(qs *QueryStore, ds *DataSource, driver neo4j.Driv
 			continue
 		}
 		n[kk] = vv
+	}
+	fmt.Printf("GetRelationShip: #%d\n", len(n))
+	for _, v := range n {
+		fmt.Printf("%s\n", v.ToString())
 	}
 
 	return n
@@ -170,7 +170,7 @@ func generateTableLineage(qs *QueryStore, ds *DataSource, driver neo4j.Driver) {
 	// 	ProcName:   "func_insert_fact_sn_info_f6",
 	// 	SchemaName: "dw",
 	// }
-	if err := HandleUDF(sqlTree, ds.DB, udf); err != nil {
+	if err := HandleUDF4Lineage(sqlTree, ds.DB, udf); err != nil {
 		log.Errorf("HandleUDF %+v, err: %s", udf, err)
 		return
 	}
@@ -215,7 +215,7 @@ func IdentifyFuncCall(sql string) (*lineage.Op, error) {
 }
 
 // 解析函数调用
-func HandleUDF(sqlTree *depgraph.Graph, db *sql.DB, udf *lineage.Op) error {
+func HandleUDF4Lineage(sqlTree *depgraph.Graph, db *sql.DB, udf *lineage.Op) error {
 	log.Infof("HandleUDF: %s.%s", udf.SchemaName, udf.ProcName)
 
 	// 排除系统函数的干扰 e.g. select now()
@@ -240,6 +240,34 @@ func HandleUDF(sqlTree *depgraph.Graph, db *sql.DB, udf *lineage.Op) error {
 	}
 
 	return nil
+}
+
+func HandleUDF4ERD(db *sql.DB, udf *lineage.Op) (map[string]*erd.RelationShip, error) {
+	log.Infof("HandleUDF: %s.%s", udf.SchemaName, udf.ProcName)
+
+	// 排除系统函数的干扰 e.g. select now()
+	if udf.SchemaName == "" || udf.SchemaName == "pg_catalog" {
+		return nil, fmt.Errorf("UDF %s is system function", udf.ProcName)
+	}
+
+	definition, err := GetUDFDefinition(db, udf)
+	if err != nil {
+		log.Errorf("GetUDFDefinition err: %s", err)
+		return nil, err
+	}
+
+	// 字符串过滤，后期 pg_query 支持 set 了，可以去掉
+	// https://github.com/pganalyze/libpg_query/issues/125
+	plpgsql := filterUnhandledCommands(definition)
+	// log.Debug("plpgsql: ", plpgsql)
+
+	relationShips, err := erd.ParseUDF(plpgsql)
+	if err != nil {
+		log.Errorf("ParseUDF %+v, err: %s", udf, err)
+		return nil, err
+	}
+
+	return relationShips, nil
 }
 
 // 过滤部分关键词
