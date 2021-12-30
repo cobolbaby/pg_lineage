@@ -81,7 +81,7 @@ func CreateGraph(driver neo4j.Driver, graph *depgraph.Graph, extends *Op) error 
 // 创建图中节点
 func CreateNode(tx neo4j.Transaction, r *Record) (*Record, error) {
 	// 需要将 ID 作为唯一主键
-	// CREATE CONSTRAINT ON (cc:CreditCard) ASSERT cc.number IS UNIQUE
+	// CREATE CONSTRAINT ON (cc:Lineage) ASSERT cc.id IS UNIQUE
 	records, err := tx.Run(`
 		MERGE (n:Lineage:`+r.SchemaName+` {id: $id}) 
 		ON CREATE SET n.database = $database, n.schemaname = $schemaname, n.relname = $relname, n.udt = timestamp(), n.size = $size, n.visited = $visited

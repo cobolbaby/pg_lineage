@@ -9,23 +9,29 @@ import (
 )
 
 type Relation struct {
-	Schema         string
-	RelName        string
-	Alias          string
-	Relpersistence string
+	Schema  string
+	RelName string
+	Alias   string
 }
 
 type Column struct {
 	Schema  string
 	RelName string
 	Field   string
-	Alias   string
+}
+
+func (r *Column) GetID() string {
+	return r.Schema + "." + r.RelName + "." + r.Field
 }
 
 type RelationShip struct {
 	SColumn *Column
 	TColumn *Column
 	Type    string
+}
+
+func (r *RelationShip) GetID() string {
+	return Hash(r)
 }
 
 // 解析sql，暂时不支持 PL/pgSQL
@@ -200,10 +206,9 @@ func parseFromClause(node *pg_query.Node, aliasMap map[string]*Relation) map[str
 
 func parseRangeVar(node *pg_query.RangeVar, aliasMap map[string]*Relation) map[string]*RelationShip {
 	lRelation := &Relation{
-		RelName:        node.GetRelname(),
-		Schema:         node.GetSchemaname(),
-		Alias:          node.GetAlias().GetAliasname(),
-		Relpersistence: node.GetRelpersistence(),
+		RelName: node.GetRelname(),
+		Schema:  node.GetSchemaname(),
+		Alias:   node.GetAlias().GetAliasname(),
 	}
 
 	aliasMap[lRelation.Alias] = lRelation
@@ -232,7 +237,7 @@ func parseSubLink(node *pg_query.SubLink, jointype pg_query.JoinType, aliasMap m
 	// case :
 	// 扩展...
 	default:
-		fmt.Printf("node.GetSubLinkType(): %s", node.GetSubLinkType())
+		fmt.Printf("node.GetSubLinkType(): %s\n", node.GetSubLinkType())
 	}
 
 	return relationShip
@@ -403,6 +408,7 @@ func parseAExpr(expr *pg_query.A_Expr, joinType pg_query.JoinType, aliasMap map[
 		rel, ok := aliasMap[l.GetColumnRef().GetFields()[0].GetString_().GetStr()]
 		if !ok {
 			fmt.Printf("Relation not found: %s\n", l.GetColumnRef().GetFields()[0].GetString_().GetStr())
+			fmt.Printf("Details: %s\n", expr)
 			return nil
 		}
 
@@ -417,6 +423,7 @@ func parseAExpr(expr *pg_query.A_Expr, joinType pg_query.JoinType, aliasMap map[
 		rel, ok := aliasMap[r.GetColumnRef().GetFields()[0].GetString_().GetStr()]
 		if !ok {
 			fmt.Printf("Relation not found: %s\n", r.GetColumnRef().GetFields()[0].GetString_().GetStr())
+			fmt.Printf("Details: %s\n", expr)
 			return nil
 		}
 

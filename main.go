@@ -8,7 +8,7 @@ import (
 	"regexp"
 	"strings"
 
-	sqlparser "github.com/cobolbaby/lineage/internal/erd"
+	"github.com/cobolbaby/lineage/internal/erd"
 	"github.com/cobolbaby/lineage/internal/lineage"
 	"github.com/cobolbaby/lineage/pkg/depgraph"
 	"github.com/cobolbaby/lineage/pkg/log"
@@ -93,6 +93,9 @@ func main() {
 	if err := lineage.ResetGraph(driver); err != nil {
 		log.Fatal("ResetGraph err: ", err)
 	}
+	if err := erd.ResetGraph(driver); err != nil {
+		log.Fatal("ResetGraph err: ", err)
+	}
 
 	// 支持获取pg_stat_statements中的sql语句
 	querys, err := ds.DB.Query(fmt.Sprintf(PG_QUERY_STORE, ds.Name))
@@ -101,7 +104,7 @@ func main() {
 	}
 	defer querys.Close()
 
-	m := make(map[string]*sqlparser.RelationShip)
+	m := make(map[string]*erd.RelationShip)
 
 	for querys.Next() {
 
@@ -111,18 +114,18 @@ func main() {
 		// 生成血缘图，因为图里面边的信息附带了udf属性，所以不能一次性往图数据库里面写入
 		// generateTableLineage(&qs, ds, driver)
 
-		// 为了减少不必要的写入冲突，在写入前依赖 MAP 特性做一次去重
-		m = sqlparser.MergeMap(m, generateTableJoinRelation(&qs, ds, driver))
+		// 为了避免重复插入，写入前依赖 MAP 特性做一次去重，并且最后一次性入库
+		m = erd.MergeMap(m, generateTableJoinRelation(&qs, ds, driver))
 
 		// 扩展别的图.
 	}
 
-	// 写库...
+	// 一次性入库...
 	fmt.Printf("GetRelationShip: #%d\n", len(m))
 	for _, v := range m {
 		fmt.Printf("%s\n", v.ToString())
 	}
-	if err := sqlparser.CreateGraph(driver, m); err != nil {
+	if err := erd.CreateGraph(driver, m); err != nil {
 		log.Errorf("ERD err: %s ", err)
 	}
 
@@ -130,7 +133,7 @@ func main() {
 
 // 生成一张 JOIN 图
 // 可以推导出关联关系的有 IN / JOIN
-func generateTableJoinRelation(qs *QueryStore, ds *DataSource, driver neo4j.Driver) map[string]*sqlparser.RelationShip {
+func generateTableJoinRelation(qs *QueryStore, ds *DataSource, driver neo4j.Driver) map[string]*erd.RelationShip {
 
 	// 跳过 udf
 	if _, err := IdentifyFuncCall(qs.Query); err == nil {
@@ -138,8 +141,8 @@ func generateTableJoinRelation(qs *QueryStore, ds *DataSource, driver neo4j.Driv
 	}
 	log.Debugf("generateTableJoinRelation sql: %s", qs.Query)
 
-	m, _ := sqlparser.Parse(qs.Query)
-	n := make(map[string]*sqlparser.RelationShip)
+	m, _ := erd.Parse(qs.Query)
+	n := make(map[string]*erd.RelationShip)
 
 	for kk, vv := range m {
 		// 过滤掉临时表
