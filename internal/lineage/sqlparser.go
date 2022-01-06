@@ -125,7 +125,7 @@ func ParseUDF(plpgsql string) (*depgraph.Graph, error) {
 		})
 	}
 
-	return nil, err
+	return sqlTree, nil
 }
 
 func parseUDFOperator(sqlTree *depgraph.Graph, operator, plan string) error {
