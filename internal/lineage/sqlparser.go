@@ -96,18 +96,19 @@ func (o *Op) GetID() string {
 	return o.SchemaName + "." + o.ProcName
 }
 
-func ParseUDF(sqlTree *depgraph.Graph, plpgsql string) error {
+func ParseUDF(plpgsql string) (*depgraph.Graph, error) {
+
+	sqlTree := depgraph.New()
 
 	raw, err := pg_query.ParsePlPgSqlToJSON(plpgsql)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	// log.Debugf("pg_query.ParsePlPgSqlToJSON: %s", raw)
 
 	v := gjson.Parse(raw).Array()[0]
 
 	for _, action := range v.Get("PLpgSQL_function.action.PLpgSQL_stmt_block.body").Array() {
-		// 遍历属性
 		action.ForEach(func(key, value gjson.Result) bool {
 			// 没有配置，或者屏蔽掉的
 			if enable, ok := PLPGSQL_BLACKLIST_STMTS[key.String()]; ok && enable {
@@ -124,7 +125,7 @@ func ParseUDF(sqlTree *depgraph.Graph, plpgsql string) error {
 		})
 	}
 
-	return nil
+	return sqlTree, nil
 }
 
 func parseUDFOperator(sqlTree *depgraph.Graph, operator, plan string) error {
@@ -152,6 +153,16 @@ func parseUDFOperator(sqlTree *depgraph.Graph, operator, plan string) error {
 	}
 
 	return nil
+}
+
+func Parse(sql string) (*depgraph.Graph, error) {
+	sqlTree := depgraph.New()
+
+	if err := ParseSQL(sqlTree, sql); err != nil {
+		return nil, err
+	}
+
+	return sqlTree, nil
 }
 
 func ParseSQL(sqlTree *depgraph.Graph, sql string) error {

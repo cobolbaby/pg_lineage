@@ -34,12 +34,12 @@ type Graph struct {
 	namespace string
 }
 
-func New(namespace string) *Graph {
+func New() *Graph {
 	return &Graph{
 		dependencies: make(depmap),
 		dependents:   make(depmap),
 		nodes:        make(nodeset),
-		namespace:    namespace,
+		namespace:    "default",
 	}
 }
 
@@ -53,6 +53,10 @@ func (g *Graph) GetRelationships() depmap {
 
 func (g *Graph) GetNamespace() string {
 	return g.namespace
+}
+
+func (g *Graph) SetNamespace(namespace string) {
+	g.namespace = namespace
 }
 
 // Add nodes and relationships

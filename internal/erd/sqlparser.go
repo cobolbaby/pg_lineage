@@ -5,21 +5,36 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/cobolbaby/lineage/pkg/log"
 	pg_query "github.com/pganalyze/pg_query_go/v2"
+	"github.com/tidwall/gjson"
+)
+
+var (
+	PLPGSQL_BLACKLIST_STMTS = map[string]bool{
+		"PLpgSQL_stmt_assign":     true,
+		"PLpgSQL_stmt_raise":      true,
+		"PLpgSQL_stmt_execsql":    false,
+		"PLpgSQL_stmt_if":         true,
+		"PLpgSQL_stmt_dynexecute": true, // 比较复杂，不太好支持
+		"PLpgSQL_stmt_perform":    true, // 暂不支持
+	}
 )
 
 type Relation struct {
-	Schema         string
-	RelName        string
-	Alias          string
-	Relpersistence string
+	Schema  string
+	RelName string
+	Alias   string
 }
 
 type Column struct {
 	Schema  string
 	RelName string
 	Field   string
-	Alias   string
+}
+
+func (r *Column) GetID() string {
+	return r.Schema + "." + r.RelName + "." + r.Field
 }
 
 type RelationShip struct {
@@ -28,7 +43,72 @@ type RelationShip struct {
 	Type    string
 }
 
-// 解析sql，暂时不支持 PL/pgSQL
+func (r *RelationShip) GetID() string {
+	return Hash(r)
+}
+
+func ParseUDF(plpgsql string) (map[string]*RelationShip, error) {
+
+	raw, err := pg_query.ParsePlPgSqlToJSON(plpgsql)
+	if err != nil {
+		return nil, err
+	}
+	// log.Debugf("pg_query.ParsePlPgSqlToJSON: %s", raw)
+
+	m := make(map[string]*RelationShip)
+	v := gjson.Parse(raw).Array()[0]
+
+	for _, action := range v.Get("PLpgSQL_function.action.PLpgSQL_stmt_block.body").Array() {
+		action.ForEach(func(key, value gjson.Result) bool {
+			// 没有配置，或者屏蔽掉的
+			if enable, ok := PLPGSQL_BLACKLIST_STMTS[key.String()]; ok && enable {
+				return false
+			}
+
+			// 递归调用 Parse
+			n, err := parseUDFOperator(key.String(), value.String())
+			if err != nil {
+				log.Errorf("pg_query.ParseToJSON err: %s, sql: %s", err, value.String())
+				return false
+			}
+			m = MergeMap(m, n)
+
+			return true
+		})
+	}
+
+	return m, nil
+}
+
+func parseUDFOperator(operator, plan string) (map[string]*RelationShip, error) {
+	// log.Printf("%s: %s\n", operator, plan)
+
+	var subQuery string
+
+	switch operator {
+	case "PLpgSQL_stmt_execsql":
+		subQuery = gjson.Get(plan, "sqlstmt.PLpgSQL_expr.query").String()
+
+		// 跳过不必要的SQL，没啥解析的价值
+		if subQuery == "select clock_timestamp()" {
+			return nil, nil
+		}
+
+	case "PLpgSQL_stmt_dynexecute":
+		// 支持 execute dynamic sql
+		subQuery = gjson.Get(plan, "query.PLpgSQL_expr.query").String()
+
+	}
+
+	m, err := Parse(subQuery)
+	if err != nil {
+		return nil, err
+	}
+
+	return m, nil
+}
+
+// 解析独立SQL，不支持关系传递
 func Parse(sql string) (map[string]*RelationShip, error) {
 
 	// Debugger
@@ -199,11 +279,18 @@ func parseFromClause(node *pg_query.Node, aliasMap map[string]*Relation) map[str
 }
 
 func parseRangeVar(node *pg_query.RangeVar, aliasMap map[string]*Relation) map[string]*RelationShip {
+	var alias string
+
+	if node.GetAlias().GetAliasname() != "" {
+		alias = node.GetAlias().GetAliasname()
+	} else {
+		alias = node.GetRelname()
+	}
+
 	lRelation := &Relation{
-		RelName:        node.GetRelname(),
-		Schema:         node.GetSchemaname(),
-		Alias:          node.GetAlias().GetAliasname(),
-		Relpersistence: node.GetRelpersistence(),
+		Schema:  node.GetSchemaname(),
+		RelName: node.GetRelname(),
+		Alias:   alias,
 	}
 
 	aliasMap[lRelation.Alias] = lRelation
@@ -232,7 +319,7 @@ func parseSubLink(node *pg_query.SubLink, jointype pg_query.JoinType, aliasMap m
 	// case :
 	// 扩展...
 	default:
-		fmt.Printf("node.GetSubLinkType(): %s", node.GetSubLinkType())
+		fmt.Printf("node.GetSubLinkType(): %s\n", node.GetSubLinkType())
 	}
 
 	return relationShip
@@ -403,6 +490,7 @@ func parseAExpr(expr *pg_query.A_Expr, joinType pg_query.JoinType, aliasMap map[
 		rel, ok := aliasMap[l.GetColumnRef().GetFields()[0].GetString_().GetStr()]
 		if !ok {
 			fmt.Printf("Relation not found: %s\n", l.GetColumnRef().GetFields()[0].GetString_().GetStr())
+			fmt.Printf("Details: %s\n", expr)
 			return nil
 		}
 
@@ -417,6 +505,7 @@ func parseAExpr(expr *pg_query.A_Expr, joinType pg_query.JoinType, aliasMap map[
 		rel, ok := aliasMap[r.GetColumnRef().GetFields()[0].GetString_().GetStr()]
 		if !ok {
 			fmt.Printf("Relation not found: %s\n", r.GetColumnRef().GetFields()[0].GetString_().GetStr())
+			fmt.Printf("Details: %s\n", expr)
 			return nil
 		}
 
