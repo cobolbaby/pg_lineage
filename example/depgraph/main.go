@@ -39,7 +39,7 @@ func (r *Record) IsTemp() bool {
 }
 
 func main() {
-	g := depgraph.New("bdc")
+	g := depgraph.New()
 
 	r1 := &Record{
 		SchemaName: "public",

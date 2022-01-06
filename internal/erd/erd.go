@@ -1,6 +1,8 @@
 package erd
 
 import (
+	"fmt"
+
 	"github.com/neo4j/neo4j-go-driver/v4/neo4j"
 )
 
@@ -80,11 +82,27 @@ func CreateNode(tx neo4j.Transaction, r *Column) error {
 }
 
 func CreateEdge(tx neo4j.Transaction, id string, r *RelationShip) error {
-	_, err := tx.Run(`
-		MATCH (snode:ERD {id: $sid}), (tnode:ERD {id: $tid})
-		CREATE (snode)-[e:`+r.Type+` {id: $id, larg: $larg, rarg: $rarg, type: $type}]->(tnode)
-		RETURN e
-	`, map[string]interface{}{
+	var cypher string
+
+	if r.Type == "JOIN_INNER" {
+		// Neo4jError: Neo.ClientError.Statement.SyntaxError (Only directed relationships are supported)
+		cypher = `
+			MATCH (snode:ERD {id: $sid}), (tnode:ERD {id: $tid})
+			CREATE (snode)-[e:` + r.Type + ` {id: $id, larg: $larg, rarg: $rarg, type: $type}]->(tnode)
+			RETURN e
+		`
+	} else if r.Type == "JOIN_LEFT" {
+		cypher = `
+			MATCH (snode:ERD {id: $sid}), (tnode:ERD {id: $tid})
+			CREATE (snode)-[e:` + r.Type + ` {id: $id, larg: $larg, rarg: $rarg, type: $type}]->(tnode)
+			RETURN e
+		`
+	} else {
+		fmt.Printf("Unknown pg_query.JoinType: %s\n", r.Type)
+		return nil
+	}
+
+	_, err := tx.Run(cypher, map[string]interface{}{
 		"id":   id,
 		"sid":  r.SColumn.Schema + "." + r.SColumn.RelName,
 		"tid":  r.TColumn.Schema + "." + r.TColumn.RelName,
