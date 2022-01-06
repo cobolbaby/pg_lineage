@@ -108,7 +108,7 @@ func parseUDFOperator(operator, plan string) (map[string]*RelationShip, error) {
 	return m, nil
 }
 
-// 解析sql，暂时不支持 PL/pgSQL
+// 解析独立SQL，不支持关系传递
 func Parse(sql string) (map[string]*RelationShip, error) {
 
 	// Debugger
@@ -279,10 +279,18 @@ func parseFromClause(node *pg_query.Node, aliasMap map[string]*Relation) map[str
 }
 
 func parseRangeVar(node *pg_query.RangeVar, aliasMap map[string]*Relation) map[string]*RelationShip {
+	var alias string
+
+	if node.GetAlias().GetAliasname() != "" {
+		alias = node.GetAlias().GetAliasname()
+	} else {
+		alias = node.GetRelname()
+	}
+
 	lRelation := &Relation{
-		RelName: node.GetRelname(),
 		Schema:  node.GetSchemaname(),
-		Alias:   node.GetAlias().GetAliasname(),
+		RelName: node.GetRelname(),
+		Alias:   alias,
 	}
 
 	aliasMap[lRelation.Alias] = lRelation
