@@ -96,11 +96,13 @@ func (o *Op) GetID() string {
 	return o.SchemaName + "." + o.ProcName
 }
 
-func ParseUDF(sqlTree *depgraph.Graph, plpgsql string) error {
+func ParseUDF(plpgsql string) (*depgraph.Graph, error) {
+
+	sqlTree := depgraph.New()
 
 	raw, err := pg_query.ParsePlPgSqlToJSON(plpgsql)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	// log.Debugf("pg_query.ParsePlPgSqlToJSON: %s", raw)
 
@@ -123,7 +125,7 @@ func ParseUDF(sqlTree *depgraph.Graph, plpgsql string) error {
 		})
 	}
 
-	return nil
+	return nil, err
 }
 
 func parseUDFOperator(sqlTree *depgraph.Graph, operator, plan string) error {
@@ -151,6 +153,16 @@ func parseUDFOperator(sqlTree *depgraph.Graph, operator, plan string) error {
 	}
 
 	return nil
+}
+
+func Parse(sql string) (*depgraph.Graph, error) {
+	sqlTree := depgraph.New()
+
+	if err := ParseSQL(sqlTree, sql); err != nil {
+		return nil, err
+	}
+
+	return sqlTree, nil
 }
 
 func ParseSQL(sqlTree *depgraph.Graph, sql string) error {
