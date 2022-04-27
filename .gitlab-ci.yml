@@ -1,3 +1,5 @@
+image: registry.inventec/infra/ci:1.0
+
 build-job:
   stage: build
   script:
