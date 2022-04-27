@@ -5,7 +5,7 @@ build-job:
   script:
     - echo "Hello, $GITLAB_USER_LOGIN!"
     - echo "Build Path, $(pwd)"
-    - make build
+    - make docker
 
 # test-job1:
 #   stage: test
