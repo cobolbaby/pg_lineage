@@ -3,6 +3,7 @@ release=dist/lineage
 image=infra/lineage
 gover=1.17.9
 tag=1.0.1
+proxy=10.190.40.239:3389
 
 build:
 	make test
@@ -18,4 +19,9 @@ test:
 	go test -v ./...
 	
 docker:
-	docker build --rm -t ${image}:${tag} --build-arg gover=${gover} .
+	docker build --rm -t ${image}:${tag} \
+		--build-arg http_proxy=http://${proxy} \
+		--build-arg https_proxy=http://${proxy} \
+		--build-arg no_proxy=*.inventec.net \
+		--build-arg gover=${gover} \
+		.
