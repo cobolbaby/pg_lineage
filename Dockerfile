@@ -1,14 +1,14 @@
 ARG gover
 FROM registry.inventec/proxy/library/golang:${gover} as builder
 
-ENV GO111MODULE=on
-ENV GOPROXY=http://nexus.itc.inventec.net/repository/go-proxy/,https://goproxy.cn,https://goproxy.io,direct
+ARG GOPROXY=http://nexus.itc.inventec.net/repository/go-proxy/,https://goproxy.cn,https://goproxy.io,direct
 
 WORKDIR /go/src/lineage
 
 # download all dependencies in image layer cache
 COPY go.mod go.sum ./
-RUN go mod download
+RUN go env -w GOPROXY=${GOPROXY} && \
+    go mod download
 
 # copy all source files/dirs
 COPY . .
