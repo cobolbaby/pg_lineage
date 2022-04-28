@@ -3,6 +3,7 @@ FROM registry.inventec/proxy/library/golang:${gover} as builder
 
 ENV GO111MODULE=on
 ENV GOPROXY=http://nexus.itc.inventec.net/repository/go-proxy/,https://goproxy.cn,https://goproxy.io,direct
+ENV GOSUMDB=off
 
 WORKDIR /go/src/lineage
 
