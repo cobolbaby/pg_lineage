@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/cobolbaby/lineage/pkg/log"
 	_ "github.com/lib/pq"
 	"github.com/neo4j/neo4j-go-driver/v4/neo4j"
+	"github.com/spf13/viper"
 )
 
 var (
@@ -57,31 +59,83 @@ type QueryStore struct {
 	MeanTime  float64
 }
 
+type Config struct {
+	Postgres struct {
+		DSN   string `mapstructure:"dsn"`
+		Alias string `mapstructure:"alias"`
+	} `mapstructure:"postgres"`
+	Neo4j struct {
+		URL      string `mapstructure:"url"`
+		User     string `mapstructure:"user"`
+		Password string `mapstructure:"password"`
+	} `mapstructure:"neo4j"`
+}
+
+var config Config
+
+func initConfig(cfgFile string) error {
+	if cfgFile != "" {
+		// Use config file from the flag.
+		viper.SetConfigFile(cfgFile)
+	} else {
+		viper.SetConfigName("config") // name of config file (without extension)
+		viper.SetConfigType("yaml")   // 设置配置文件类型
+		// viper.AddConfigPath("$HOME/.dkron") // call multiple times to add many search paths
+		viper.AddConfigPath("./config") // call multiple times to add many search paths
+	}
+
+	// 如果有相应的环境变量设置，则使用环境变量的值覆盖配置文件中的值
+	viper.SetEnvPrefix("LINEAGE")
+	replacer := strings.NewReplacer("-", "_")
+	viper.SetEnvKeyReplacer(replacer)
+	viper.AutomaticEnv() // read in environment variables that match
+
+	// 读取配置文件
+	err := viper.ReadInConfig()
+	if err != nil {
+		fmt.Println("Error reading config file:", err)
+		return err
+	}
+
+	// 将配置文件内容解析到结构体中
+	err = viper.Unmarshal(&config)
+	if err != nil {
+		fmt.Println("Error parsing config file:", err)
+		return err
+	}
+
+	return nil
+}
+
 func init() {
 	if err := log.InitLogger(&log.LoggerConfig{
-		Level: "info",
+		Level: "debug",
 		Path:  "./logs/lineage.log",
 	}); err != nil {
 		fmt.Println(err)
+		os.Exit(1)
+	}
+
+	if err := initConfig("./config/config.yaml"); err != nil {
+		log.Fatal("initConfig err: ", err)
 	}
 }
 
 func main() {
-	// db, err := sql.Open("postgres", "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable")
-	db, err := sql.Open("postgres", DB_DSN)
+	db, err := sql.Open("postgres", config.Postgres.DSN)
 	if err != nil {
 		log.Fatal("sql.Open err: ", err)
 	}
 	defer db.Close()
 
-	uri, _ := url.Parse(DB_DSN)
+	uri, _ := url.Parse(config.Postgres.DSN)
 	ds := &DataSource{
-		Alias: DB_ALIAS,
+		Alias: config.Postgres.Alias,
 		Name:  strings.TrimPrefix(uri.Path, "/"),
 		DB:    db,
 	}
 
-	driver, err := neo4j.NewDriver(NEO4J_URL, neo4j.BasicAuth(NEO4J_USER, NEO4J_PASSWORD, ""))
+	driver, err := neo4j.NewDriver(config.Neo4j.URL, neo4j.BasicAuth(config.Neo4j.User, config.Neo4j.Password, ""))
 	if err != nil {
 		log.Fatal("neo4j.NewDriver err: ", err)
 	}
@@ -112,10 +166,10 @@ func main() {
 		_ = querys.Scan(&qs.Query, &qs.Calls, &qs.TotalTime, &qs.MinTime, &qs.MaxTime, &qs.MeanTime)
 
 		// 生成血缘图，因为图里面边的信息附带了udf属性，所以不能一次性往图数据库里面写入
-		// generateTableLineage(&qs, ds, driver)
+		generateTableLineage(&qs, ds, driver)
 
 		// 为了避免重复插入，写入前依赖 MAP 特性做一次去重，并且最后一次性入库
-		m = erd.MergeMap(m, generateTableJoinRelation(&qs, ds, driver))
+		// m = erd.MergeMap(m, generateTableJoinRelation(&qs, ds, driver))
 
 		// 扩展别的图.
 	}
@@ -231,8 +285,6 @@ func HandleUDF4Lineage(db *sql.DB, udf *lineage.Op) (*depgraph.Graph, error) {
 		return nil, err
 	}
 
-	// 字符串过滤，后期 pg_query 支持 set 了，可以去掉
-	// https://github.com/pganalyze/libpg_query/issues/125
 	plpgsql := filterUnhandledCommands(definition)
 	// log.Debug("plpgsql: ", plpgsql)
 
@@ -259,8 +311,6 @@ func HandleUDF4ERD(db *sql.DB, udf *lineage.Op) (map[string]*erd.RelationShip, e
 		return nil, err
 	}
 
-	// 字符串过滤，后期 pg_query 支持 set 了，可以去掉
-	// https://github.com/pganalyze/libpg_query/issues/125
 	plpgsql := filterUnhandledCommands(definition)
 	// log.Debug("plpgsql: ", plpgsql)
 
@@ -275,7 +325,9 @@ func HandleUDF4ERD(db *sql.DB, udf *lineage.Op) (map[string]*erd.RelationShip, e
 
 // 过滤部分关键词
 func filterUnhandledCommands(content string) string {
-	return PLPGSQL_UNHANLED_COMMANDS.ReplaceAllString(content, "")
+	// 字符串过滤，https://github.com/pganalyze/libpg_query/issues/125
+	// return PLPGSQL_UNHANLED_COMMANDS.ReplaceAllString(content, "")
+	return content
 }
 
 // 获取相关定义
