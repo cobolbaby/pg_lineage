@@ -1,13 +1,12 @@
 package lineage
 
 import (
-	"errors"
 	"strings"
 	"time"
 
 	"github.com/cobolbaby/lineage/pkg/depgraph"
 	"github.com/cobolbaby/lineage/pkg/log"
-	pg_query "github.com/pganalyze/pg_query_go/v2"
+	pg_query "github.com/pganalyze/pg_query_go/v5"
 	"github.com/tidwall/gjson"
 )
 
@@ -167,180 +166,168 @@ func Parse(sql string) (*depgraph.Graph, error) {
 
 func ParseSQL(sqlTree *depgraph.Graph, sql string) error {
 
-	raw, err := pg_query.ParseToJSON(sql)
+	log.Debugf("%s\n", sql)
+	result, err := pg_query.Parse(sql)
 	if err != nil {
 		return err
 	}
-	// log.Debugf("%s: %s\n", sql, raw)
 
-	// https://github.com/tidwall/gjson#path-syntax
-	stmts := gjson.Get(raw, "stmts.#.stmt").Array()
-	for _, v := range stmts {
+	for _, s := range result.Stmts {
 
 		// 跳过 analyze/drop/truncate/create index 语句
-		if v.Get("VacuumStmt").Exists() ||
-			v.Get("DropStmt").Exists() ||
-			v.Get("TruncateStmt").Exists() ||
-			v.Get("IndexStmt").Exists() {
+		if s.Stmt.GetVacuumStmt() != nil ||
+			s.Stmt.GetDropStmt() != nil ||
+			s.Stmt.GetTruncateStmt() != nil ||
+			s.Stmt.GetIndexStmt() != nil {
 			break
 		}
 
-		// create table ... as 操作
-		if v.Get("CreateTableAsStmt").Exists() {
-			cvv := v.Get("CreateTableAsStmt")
+		// create table ... as
+		if s.Stmt.GetCreateTableAsStmt() != nil {
+			ctas := s.Stmt.GetCreateTableAsStmt()
 
-			tnode := &Record{
-				RelName:    cvv.Get("into.rel.relname").String(),
-				SchemaName: cvv.Get("into.rel.schemaname").String(),
-				Type:       cvv.Get("into.rel.relpersistence").String(),
-			}
+			tnode := parseRangeVar(ctas.GetInto().GetRel())
 			sqlTree.AddNode(tnode)
 
-			if cvv.Get("query.SelectStmt").Exists() {
-				vv := cvv.Get("query.SelectStmt")
+			if ctas.GetQuery().GetSelectStmt() != nil {
 
-				if vv.Get("withClause").Exists() {
-					parseWithClause(vv, sqlTree)
+				// with ... select ...
+				// select ... union select ...
+				// select ... from ...
+
+				ss := ctas.GetQuery().GetSelectStmt()
+
+				if ss.GetWithClause() != nil {
+					parseWithClause(ss.GetWithClause(), sqlTree)
 				}
 
-				for _, r := range parseFromClause(vv) {
+				for _, r := range parseSelectStmt(ss) {
+					sqlTree.DependOn(tnode, r)
+				}
+
+			}
+		}
+
+		// create table ...
+		if s.Stmt.GetCreateStmt() != nil {
+			cs := s.Stmt.GetCreateStmt()
+
+			tnode := parseRangeVar(cs.GetRelation())
+			sqlTree.AddNode(tnode)
+		}
+
+		// insert into ...
+		if s.Stmt.GetInsertStmt() != nil {
+			is := s.Stmt.GetInsertStmt()
+
+			tnode := parseRangeVar(is.GetRelation())
+			sqlTree.AddNode(tnode)
+
+			// // with ... select * from ...
+			// if is.GetWithClause() != nil {
+			// 	parseWithClause(is.GetWithClause(), sqlTree)
+			// }
+
+			// select * from ...
+			if is.GetSelectStmt() != nil {
+
+				ss := is.GetSelectStmt()
+
+				// with ... select * from ...
+				if ss.GetWithClause() != nil {
+					parseWithClause(ss.GetWithClause(), sqlTree)
+				}
+
+				for _, r := range parseSelectStmt(ss.GetSelectStmt()) {
 					sqlTree.DependOn(tnode, r)
 				}
 			}
 		}
 
-		// 单独创建 table
-		if v.Get("CreateStmt").Exists() {
-			vv := v.Get("CreateStmt")
-			if r := parseRelname(vv); r != nil {
-				sqlTree.AddNode(r)
-			}
-		}
+		// delete from ...
+		// delete from ... using ... where ...
+		if s.Stmt.GetDeleteStmt() != nil {
+			ds := s.Stmt.GetDeleteStmt()
 
-		// 如果该 SQL 为 select 操作，则获取 from
-		if v.Get("SelectStmt").Exists() {
-			vv := v.Get("SelectStmt")
-			for _, r := range parseFromClause(vv) {
-				sqlTree.AddNode(r)
-			}
-		}
-
-		// insert into tbl ...
-		// insert into tbl ... select * from ...
-		// with ... insert into tbl ... select * from ...
-		// insert into tbl with ... select * from ...
-		if v.Get("InsertStmt").Exists() {
-			ivv := v.Get("InsertStmt")
-
-			if ivv.Get("withClause").Exists() {
-				parseWithClause(ivv, sqlTree)
-			}
-
-			tnode := parseRelname(ivv)
-			sqlTree.AddNode(tnode)
-
-			if ivv.Get("selectStmt.SelectStmt").Exists() {
-				vv := ivv.Get("selectStmt.SelectStmt")
-
-				if vv.Get("withClause").Exists() {
-					parseWithClause(vv, sqlTree)
-				}
-
-				for _, r := range parseFromClause(vv) {
-					sqlTree.DependOn(tnode, r)
-				}
-			}
-		}
-
-		// update tbl set ...
-		// update tbl set ... from tbl2
-		// update tbl set ... from (select * from tbl2) tbl3 where ...
-		if v.Get("UpdateStmt").Exists() {
-			vv := v.Get("UpdateStmt")
-			tnode := parseRelname(vv)
-			sqlTree.AddNode(tnode)
-
-			if vv.Get("fromClause").Exists() {
-				for _, r := range parseFromClause(vv) {
-					sqlTree.DependOn(tnode, r)
-				}
-			}
-		}
-
-		// 如果该 SQL 为 delete 操作，则填充目标节点
-		// delete from tbl where ...
-		// delete from tbl using tbl2 where ...
-		if v.Get("DeleteStmt").Exists() {
-			vv := v.Get("DeleteStmt")
-			tnode := parseRelname(vv)
+			tnode := parseRangeVar(ds.GetRelation())
 			sqlTree.AddNode(tnode)
 
 			// 关联删除，依赖 using 关键词
-			if vv.Get("usingClause").Exists() {
-				for _, r := range parseUsingClause(vv) {
+			if ds.GetUsingClause() != nil {
+				for _, r := range parseUsingClause(ds.GetUsingClause()) {
+					sqlTree.DependOn(tnode, r)
+				}
+			}
+
+			// 关联删除，依赖 where 关键词
+			// if ds.GetWhereClause() != nil {
+			// 	for _, r := range parseWhereClause(ds.GetWhereClause()) {
+			// 		sqlTree.DependOn(tnode, r)
+			// 	}
+			// }
+		}
+
+		// update ... set ...
+		// update ... set ... from ...
+		// update ... set ... from (select * from tbl2) tbl3 where ...
+		if s.Stmt.GetUpdateStmt() != nil {
+			us := s.Stmt.GetUpdateStmt()
+
+			tnode := parseRangeVar(us.GetRelation())
+			sqlTree.AddNode(tnode)
+
+			if us.GetFromClause() != nil {
+				for _, r := range parseUsingClause(us.GetFromClause()) {
 					sqlTree.DependOn(tnode, r)
 				}
 			}
 		}
+
+		// select ... from ...
+		if s.Stmt.GetSelectStmt() != nil {
+			ss := s.Stmt.GetSelectStmt()
+			for _, r := range parseSelectStmt(ss) {
+				sqlTree.AddNode(r)
+			}
+		}
+
 	}
 
 	return nil
 }
 
-func parseUsingClause(v gjson.Result) []*Record {
-	var records []*Record
+// INSERT / UPDATE / DELETE / CREATE TABLE 单表操作
+func parseRangeVar(node *pg_query.RangeVar) *Record {
 
-	if !v.Get("usingClause").Exists() {
-		return records
-	}
+	// var alias string
 
-	usingClause := v.Get("usingClause").Array()
-	for _, vv := range usingClause {
-
-		// 只有一个表
-		if vv.Get("RangeVar").Exists() {
-			records = append(records, &Record{
-				RelName:    vv.Get("RangeVar.relname").String(),
-				SchemaName: vv.Get("RangeVar.schemaname").String(),
-				Type:       vv.Get("RangeVar.relpersistence").String(),
-			})
-		}
-
-	}
-	return records
-}
-
-// INSERT / UPDATE / DELETE / CREATE TABLE 简单操作
-func parseRelname(v gjson.Result) *Record {
-	if !v.Get("relation").Exists() {
-		return nil
-	}
+	// if node.GetAlias().GetAliasname() != "" {
+	// 	alias = node.GetAlias().GetAliasname()
+	// } else {
+	// 	alias = node.GetRelname()
+	// }
 
 	return &Record{
-		RelName:    v.Get("relation.relname").String(),
-		SchemaName: v.Get("relation.schemaname").String(),
-		Type:       v.Get("relation.relpersistence").String(),
+		RelName:    node.GetRelname(),
+		SchemaName: node.GetSchemaname(),
+		Type:       node.GetRelpersistence(), // relpersistence 不同，全局临时表为 s ，普通临时表为 t
 	}
+
 }
 
 // CTE 子句
-func parseWithClause(v gjson.Result, sqlTree *depgraph.Graph) error {
+func parseWithClause(wc *pg_query.WithClause, sqlTree *depgraph.Graph) error {
 
-	if !v.Get("withClause").Exists() {
-		return errors.New("withClause not exists")
-	}
-
-	ctes := v.Get("withClause.ctes").Array()
-	for _, vv := range ctes {
+	for _, cte := range wc.GetCtes() {
 		tnode := &Record{
-			RelName:    vv.Get("CommonTableExpr.ctename").String(),
+			RelName:    cte.GetCommonTableExpr().GetCtename(),
 			SchemaName: "",
 			Type:       REL_PERSIST_NOT,
 		}
 		sqlTree.AddNode(tnode)
 
 		// 如果存在 FROM 字句，则需要添加依赖关系
-		for _, r := range parseFromClause(vv.Get("CommonTableExpr.ctequery.SelectStmt")) {
+		for _, r := range parseSelectStmt(cte.GetCommonTableExpr().GetCtequery().GetSelectStmt()) {
 			sqlTree.DependOn(tnode, r)
 		}
 	}
@@ -348,110 +335,113 @@ func parseWithClause(v gjson.Result, sqlTree *depgraph.Graph) error {
 	return nil
 }
 
-// UNION 解析
-func parserUnionClause(v gjson.Result) []*Record {
+// FROM Clause
+func parseSelectStmt(ss *pg_query.SelectStmt) []*Record {
 	var records []*Record
 
-	if v.Get("op").String() != "SETOP_UNION" {
-		return records
+	// 如果遇到 UNION，则调用 parseUnionClause 方法
+	if ss.GetOp() == pg_query.SetOperation_SETOP_UNION {
+		if r := parseUnionClause(ss); r != nil {
+			records = append(records, r...)
+		}
 	}
 
-	if r := parseFromClause(v.Get("larg")); r != nil {
-		records = append(records, r...)
+	for _, fc := range ss.GetFromClause() {
+
+		// 最简单的 select 查询，只有一个表
+		if fc.GetRangeVar() != nil {
+			records = append(records, parseRangeVar(fc.GetRangeVar()))
+		}
+		// 子查询
+		if fc.GetRangeSubselect() != nil {
+			if r := parseSelectStmt(fc.GetRangeSubselect().GetSubquery().GetSelectStmt()); r != nil {
+				records = append(records, r...)
+			}
+		}
+		// 关联查询
+		if fc.GetJoinExpr() != nil {
+			if r := parseJoinClause(fc.GetJoinExpr()); r != nil {
+				records = append(records, r...)
+			}
+		}
 	}
-	if r := parseFromClause(v.Get("rarg")); r != nil {
-		records = append(records, r...)
-	}
+
 	return records
 }
 
-// FROM Clause
-func parseFromClause(v gjson.Result) []*Record {
-	// 如果遇到 UNION，则调用 parserUnionClause 方法
-	if v.Get("op").String() == "SETOP_UNION" {
-		return parserUnionClause(v)
-	}
-
+// UNION 解析
+func parseUnionClause(ss *pg_query.SelectStmt) []*Record {
 	var records []*Record
 
-	if !v.Get("fromClause").Exists() {
+	if ss.GetOp() != pg_query.SetOperation_SETOP_UNION {
 		return records
 	}
 
-	fromClause := v.Get("fromClause").Array()
-	for _, vv := range fromClause {
-
-		// 最简单的 select 查询，只有一个表
-		if vv.Get("RangeVar").Exists() {
-			records = append(records, &Record{
-				RelName:    vv.Get("RangeVar.relname").String(),
-				SchemaName: vv.Get("RangeVar.schemaname").String(),
-				Type:       vv.Get("RangeVar.relpersistence").String(),
-			})
-		}
-
-		// 子查询
-		if vv.Get("RangeSubselect").Exists() {
-			if r := parseFromClause(vv.Get("RangeSubselect.subquery.SelectStmt")); r != nil {
-				records = append(records, r...)
-			}
-		}
-
-		// 关联查询
-		if vv.Get("JoinExpr").Exists() {
-			if r := parseJoinClause(vv); r != nil {
-				records = append(records, r...)
-			}
-		}
+	if r := parseSelectStmt(ss.GetLarg()); r != nil {
+		records = append(records, r...)
 	}
-
+	if r := parseSelectStmt(ss.GetRarg()); r != nil {
+		records = append(records, r...)
+	}
 	return records
 }
 
 // JOIN Clause
-func parseJoinClause(v gjson.Result) []*Record {
+func parseJoinClause(jc *pg_query.JoinExpr) []*Record {
 	var records []*Record
 
-	if !v.Get("JoinExpr").Exists() {
-		return records
+	larg := jc.GetLarg()
+	rarg := jc.GetRarg()
+
+	if larg.GetRangeVar() != nil {
+		records = append(records, parseRangeVar(larg.GetRangeVar()))
+	}
+	if rarg.GetRangeVar() != nil {
+		records = append(records, parseRangeVar(rarg.GetRangeVar()))
+	}
+	if larg.GetRangeSubselect() != nil {
+		if r := parseSelectStmt(larg.GetRangeSubselect().GetSubquery().GetSelectStmt()); r != nil {
+			records = append(records, r...)
+		}
+	}
+	if rarg.GetRangeSubselect() != nil {
+		if r := parseSelectStmt(rarg.GetRangeSubselect().GetSubquery().GetSelectStmt()); r != nil {
+			records = append(records, r...)
+		}
+	}
+	if larg.GetJoinExpr() != nil {
+		if r := parseJoinClause(larg.GetJoinExpr()); r != nil {
+			records = append(records, r...)
+		}
+	}
+	if rarg.GetJoinExpr() != nil {
+		if r := parseJoinClause(rarg.GetJoinExpr()); r != nil {
+			records = append(records, r...)
+		}
 	}
 
-	lvv := v.Get("JoinExpr.larg")
-	rvv := v.Get("JoinExpr.rarg")
+	return records
+}
 
-	if lvv.Get("RangeVar").Exists() {
-		records = append(records, &Record{
-			RelName:    lvv.Get("RangeVar.relname").String(),
-			SchemaName: lvv.Get("RangeVar.schemaname").String(),
-			Type:       lvv.Get("RangeVar.relpersistence").String(),
-		})
-	}
-	if rvv.Get("RangeVar").Exists() {
-		records = append(records, &Record{
-			RelName:    rvv.Get("RangeVar.relname").String(),
-			SchemaName: rvv.Get("RangeVar.schemaname").String(),
-			Type:       rvv.Get("RangeVar.relpersistence").String(),
-		})
-	}
-	if lvv.Get("RangeSubselect").Exists() {
-		if r := parseFromClause(lvv.Get("RangeSubselect.subquery.SelectStmt")); r != nil {
-			records = append(records, r...)
+// 关联删除，关联更新
+func parseUsingClause(uc []*pg_query.Node) []*Record {
+	var records []*Record
+
+	for _, r := range uc {
+		// 只关联了一张表
+		if r.GetRangeVar() != nil {
+			records = append(records, parseRangeVar(r.GetRangeVar()))
 		}
 	}
-	if rvv.Get("RangeSubselect").Exists() {
-		if r := parseFromClause(rvv.Get("RangeSubselect.subquery.SelectStmt")); r != nil {
-			records = append(records, r...)
-		}
-	}
-	if lvv.Get("JoinExpr").Exists() {
-		if r := parseJoinClause(lvv); r != nil {
-			records = append(records, r...)
-		}
-	}
-	if rvv.Get("JoinExpr").Exists() {
-		if r := parseJoinClause(rvv); r != nil {
-			records = append(records, r...)
-		}
+
+	return records
+}
+
+func parseWhereClause(wc *pg_query.Node) []*Record {
+	var records []*Record
+
+	if wc.GetSubLink() != nil {
+		log.Debugf("parseWhereClause: %v", wc.GetSubLink())
 	}
 
 	return records
