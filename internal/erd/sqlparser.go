@@ -6,7 +6,7 @@ import (
 	"fmt"
 
 	"github.com/cobolbaby/lineage/pkg/log"
-	pg_query "github.com/pganalyze/pg_query_go/v2"
+	pg_query "github.com/pganalyze/pg_query_go/v5"
 	"github.com/tidwall/gjson"
 )
 
@@ -343,18 +343,18 @@ func parseAnySubLink(node *pg_query.SubLink, jointype pg_query.JoinType, aliasMa
 
 	relationship := &RelationShip{}
 
-	lrel := aliasMap[node.GetTestexpr().GetColumnRef().GetFields()[0].GetString_().GetStr()]
+	lrel := aliasMap[node.GetTestexpr().GetColumnRef().GetFields()[0].GetString_().GetSval()]
 	relationship.SColumn = &Column{
 		Schema:  lrel.Schema,
 		RelName: lrel.RelName,
-		Field:   node.GetTestexpr().GetColumnRef().GetFields()[1].GetString_().GetStr(),
+		Field:   node.GetTestexpr().GetColumnRef().GetFields()[1].GetString_().GetSval(),
 	}
 
 	rrel := node.GetSubselect().GetSelectStmt().GetFromClause()[0].GetRangeVar()
 	relationship.TColumn = &Column{
 		Schema:  rrel.GetSchemaname(),
 		RelName: rrel.GetRelname(),
-		Field:   node.GetSubselect().GetSelectStmt().GetTargetList()[0].GetResTarget().GetVal().GetColumnRef().GetFields()[0].GetString_().GetStr(),
+		Field:   node.GetSubselect().GetSelectStmt().GetTargetList()[0].GetResTarget().GetVal().GetColumnRef().GetFields()[0].GetString_().GetSval(),
 	}
 
 	relationship.Type = jointype.String()
@@ -487,9 +487,9 @@ func parseAExpr(expr *pg_query.A_Expr, joinType pg_query.JoinType, aliasMap map[
 	relationship := &RelationShip{}
 
 	if len(l.GetColumnRef().GetFields()) == 2 {
-		rel, ok := aliasMap[l.GetColumnRef().GetFields()[0].GetString_().GetStr()]
+		rel, ok := aliasMap[l.GetColumnRef().GetFields()[0].GetString_().GetSval()]
 		if !ok {
-			fmt.Printf("Relation not found: %s\n", l.GetColumnRef().GetFields()[0].GetString_().GetStr())
+			fmt.Printf("Relation not found: %s\n", l.GetColumnRef().GetFields()[0].GetString_().GetSval())
 			fmt.Printf("Details: %s\n", expr)
 			return nil
 		}
@@ -497,14 +497,14 @@ func parseAExpr(expr *pg_query.A_Expr, joinType pg_query.JoinType, aliasMap map[
 		relationship.SColumn = &Column{
 			Schema:  rel.Schema,
 			RelName: rel.RelName,
-			Field:   l.GetColumnRef().GetFields()[1].GetString_().GetStr(),
+			Field:   l.GetColumnRef().GetFields()[1].GetString_().GetSval(),
 		}
 	}
 
 	if len(r.GetColumnRef().GetFields()) == 2 {
-		rel, ok := aliasMap[r.GetColumnRef().GetFields()[0].GetString_().GetStr()]
+		rel, ok := aliasMap[r.GetColumnRef().GetFields()[0].GetString_().GetSval()]
 		if !ok {
-			fmt.Printf("Relation not found: %s\n", r.GetColumnRef().GetFields()[0].GetString_().GetStr())
+			fmt.Printf("Relation not found: %s\n", r.GetColumnRef().GetFields()[0].GetString_().GetSval())
 			fmt.Printf("Details: %s\n", expr)
 			return nil
 		}
@@ -512,7 +512,7 @@ func parseAExpr(expr *pg_query.A_Expr, joinType pg_query.JoinType, aliasMap map[
 		relationship.TColumn = &Column{
 			Schema:  rel.Schema,
 			RelName: rel.RelName,
-			Field:   r.GetColumnRef().GetFields()[1].GetString_().GetStr(),
+			Field:   r.GetColumnRef().GetFields()[1].GetString_().GetSval(),
 		}
 	}
 
