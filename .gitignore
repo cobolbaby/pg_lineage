@@ -3,4 +3,4 @@ dist
 logs
 vendor
 .fuse*
-__debug_bin
+__debug_bin*
