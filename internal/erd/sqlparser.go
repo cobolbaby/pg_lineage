@@ -47,6 +47,31 @@ func (r *RelationShip) GetID() string {
 	return Hash(r)
 }
 
+func (r *RelationShip) ToString() string {
+	if r.SColumn == nil || r.TColumn == nil {
+		return ""
+	}
+
+	var sDisplayName, tDisplayName string
+
+	if r.SColumn.Schema == "" {
+		sDisplayName = r.SColumn.RelName
+	} else {
+		sDisplayName = fmt.Sprintf("%s.%s", r.SColumn.Schema, r.SColumn.RelName)
+	}
+	if r.TColumn.Schema == "" {
+		tDisplayName = r.TColumn.RelName
+	} else {
+		tDisplayName = fmt.Sprintf("%s.%s", r.TColumn.Schema, r.TColumn.RelName)
+	}
+
+	return fmt.Sprintf("%s.%s %s %s.%s",
+		sDisplayName, r.SColumn.Field,
+		r.Type,
+		tDisplayName, r.TColumn.Field,
+	)
+}
+
 func ParseUDF(plpgsql string) (map[string]*RelationShip, error) {
 
 	raw, err := pg_query.ParsePlPgSqlToJSON(plpgsql)
@@ -206,31 +231,6 @@ func parseDeleteStmt(deleteStmt *pg_query.DeleteStmt) map[string]*RelationShip {
 func parseUpdateStmt(updateStmt *pg_query.UpdateStmt) map[string]*RelationShip {
 	// fmt.Printf("parseUpdateStmt: %s\n", updateStmt)
 	return nil
-}
-
-func (r *RelationShip) ToString() string {
-	if r.SColumn == nil || r.TColumn == nil {
-		return ""
-	}
-
-	var sDisplayName, tDisplayName string
-
-	if r.SColumn.Schema == "" {
-		sDisplayName = r.SColumn.RelName
-	} else {
-		sDisplayName = fmt.Sprintf("%s.%s", r.SColumn.Schema, r.SColumn.RelName)
-	}
-	if r.TColumn.Schema == "" {
-		tDisplayName = r.TColumn.RelName
-	} else {
-		tDisplayName = fmt.Sprintf("%s.%s", r.TColumn.Schema, r.TColumn.RelName)
-	}
-
-	return fmt.Sprintf("%s.%s %s %s.%s",
-		sDisplayName, r.SColumn.Field,
-		r.Type,
-		tDisplayName, r.TColumn.Field,
-	)
 }
 
 func parseWithClause(withClause *pg_query.WithClause, aliasMap map[string]*Relation) map[string]*RelationShip {
