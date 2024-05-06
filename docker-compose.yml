@@ -1,7 +1,7 @@
 version: "2"
 services:
   neo4j:
-    image: registry.inventec/proxy/library/neo4j:4.3.6
+    image: registry.inventec/proxy/neo4j:5.19.0
     container_name: neo4j
     ports:
       - "7474:7474"
@@ -10,5 +10,4 @@ services:
     #   - "/tmp/neo4j/data:/data"
     environment:
       - NEO4J_AUTH=neo4j/neo4j123
-      - NEO4J_dbms_default__database=graph.db
-      - NEO4J_dbms_allow__upgrade=true
+      - NEO4J_initial_dbms_default__database=graph.db
