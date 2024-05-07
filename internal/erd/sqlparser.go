@@ -158,16 +158,18 @@ func parseSQL(relationShip map[string]*RelationShip, sql string) error {
 		// vacuum  跳过
 		// analyze 跳过
 		// create index 跳过
-		// insert  解析其中的 select 子句
+		// insert  解析 select 子句
 		// delete  仅解析关联删除
 		// update  仅解析关联更新
-		// create  解析其中的 select 子句
-		// select  已经解析
+		// create  解析 select 子句
+		// select  解析
+		// set     跳过
 
 		if v.Stmt.GetTruncateStmt() != nil ||
 			v.Stmt.GetDropStmt() != nil ||
 			v.Stmt.GetVacuumStmt() != nil ||
-			v.Stmt.GetIndexStmt() != nil {
+			v.Stmt.GetIndexStmt() != nil ||
+			v.Stmt.GetVariableSetStmt() != nil {
 			continue
 		}
 
@@ -265,7 +267,7 @@ func parseWithClause(withClause *pg_query.WithClause, aliasMap map[string]*Relat
 func parseFromClause(node *pg_query.Node, aliasMap map[string]*Relation) map[string]*RelationShip {
 	// 包含 JOIN
 	if node.GetJoinExpr() != nil {
-		return parseJoinClause(node, aliasMap)
+		return parseJoinClause(node.GetJoinExpr(), aliasMap)
 	}
 
 	// 只是简单的一张表
@@ -369,21 +371,16 @@ func parseAnySubLink(node *pg_query.SubLink, jointype pg_query.JoinType, aliasMa
 }
 
 // 返回左右表间的关系，所以主体有两个表，外加关系，多张表的话，则需要返回子结果集
-func parseJoinClause(node *pg_query.Node, aliasMap map[string]*Relation) map[string]*RelationShip {
-	if node.GetJoinExpr() == nil {
-		return nil
-	}
-
+func parseJoinClause(j *pg_query.JoinExpr, aliasMap map[string]*Relation) map[string]*RelationShip {
 	m := make(map[string]*RelationShip)
-	j := node.GetJoinExpr()
 
 	// 优先遍历内层JOIN
 	if j.GetLarg().GetJoinExpr() != nil {
-		lSubRelationShip := parseJoinClause(j.GetLarg(), aliasMap)
+		lSubRelationShip := parseJoinClause(j.GetLarg().GetJoinExpr(), aliasMap)
 		maps.Copy(m, lSubRelationShip)
 	}
 	if j.GetRarg().GetJoinExpr() != nil {
-		rSubRelationShip := parseJoinClause(j.GetRarg(), aliasMap)
+		rSubRelationShip := parseJoinClause(j.GetRarg().GetJoinExpr(), aliasMap)
 		maps.Copy(m, rSubRelationShip)
 	}
 	// 处理子查询

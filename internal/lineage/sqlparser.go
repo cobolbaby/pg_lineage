@@ -175,11 +175,12 @@ func parseSQL(sqlTree *depgraph.Graph, sql string) error {
 
 	for _, s := range result.Stmts {
 
-		// 跳过 analyze/drop/truncate/create index 语句
-		if s.Stmt.GetVacuumStmt() != nil ||
+		// 跳过 drop/truncate/create index/analyze/vacuum/set 语句
+		if s.Stmt.GetTruncateStmt() != nil ||
 			s.Stmt.GetDropStmt() != nil ||
-			s.Stmt.GetTruncateStmt() != nil ||
-			s.Stmt.GetIndexStmt() != nil {
+			s.Stmt.GetVacuumStmt() != nil ||
+			s.Stmt.GetIndexStmt() != nil ||
+			s.Stmt.GetVariableSetStmt() != nil {
 			break
 		}
 
