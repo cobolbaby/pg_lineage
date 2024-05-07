@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"maps"
 	"net/url"
 	"os"
 	"regexp"
@@ -169,7 +170,8 @@ func main() {
 		generateTableLineage(&qs, ds, driver)
 
 		// 为了避免重复插入，写入前依赖 MAP 特性做一次去重，并且最后一次性入库
-		// m = erd.MergeMap(m, generateTableJoinRelation(&qs, ds, driver))
+		r := generateTableJoinRelation(&qs, ds, driver)
+		maps.Copy(m, r)
 
 		// 扩展别的图.
 	}
@@ -178,6 +180,8 @@ func main() {
 	if err := erd.CreateGraph(driver, m); err != nil {
 		log.Errorf("ERD err: %s ", err)
 	}
+
+	// TODO:查询所有的节点，获取所有表信息，将其插入到图数据库中
 
 }
 

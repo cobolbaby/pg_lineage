@@ -147,7 +147,7 @@ func parseUDFOperator(sqlTree *depgraph.Graph, operator, plan string) error {
 
 	}
 
-	if err := ParseSQL(sqlTree, subQuery); err != nil {
+	if err := parseSQL(sqlTree, subQuery); err != nil {
 		return err
 	}
 
@@ -157,14 +157,14 @@ func parseUDFOperator(sqlTree *depgraph.Graph, operator, plan string) error {
 func Parse(sql string) (*depgraph.Graph, error) {
 	sqlTree := depgraph.New()
 
-	if err := ParseSQL(sqlTree, sql); err != nil {
+	if err := parseSQL(sqlTree, sql); err != nil {
 		return nil, err
 	}
 
 	return sqlTree, nil
 }
 
-func ParseSQL(sqlTree *depgraph.Graph, sql string) error {
+func parseSQL(sqlTree *depgraph.Graph, sql string) error {
 
 	log.Debugf("%s\n", sql)
 	result, err := pg_query.Parse(sql)

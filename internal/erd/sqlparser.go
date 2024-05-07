@@ -4,6 +4,7 @@ import (
 	"crypto/md5"
 	"encoding/json"
 	"fmt"
+	"maps"
 
 	"github.com/cobolbaby/lineage/pkg/log"
 	pg_query "github.com/pganalyze/pg_query_go/v5"
@@ -80,7 +81,7 @@ func ParseUDF(plpgsql string) (map[string]*RelationShip, error) {
 	}
 	// log.Debugf("pg_query.ParsePlPgSqlToJSON: %s", raw)
 
-	m := make(map[string]*RelationShip)
+	relationShip := make(map[string]*RelationShip)
 	v := gjson.Parse(raw).Array()[0]
 
 	for _, action := range v.Get("PLpgSQL_function.action.PLpgSQL_stmt_block.body").Array() {
@@ -91,21 +92,19 @@ func ParseUDF(plpgsql string) (map[string]*RelationShip, error) {
 			}
 
 			// 递归调用 Parse
-			n, err := parseUDFOperator(key.String(), value.String())
-			if err != nil {
+			if err := parseUDFOperator(relationShip, key.String(), value.String()); err != nil {
 				log.Errorf("pg_query.ParseToJSON err: %s, sql: %s", err, value.String())
 				return false
 			}
-			m = MergeMap(m, n)
 
 			return true
 		})
 	}
 
-	return m, nil
+	return relationShip, nil
 }
 
-func parseUDFOperator(operator, plan string) (map[string]*RelationShip, error) {
+func parseUDFOperator(relationShip map[string]*RelationShip, operator, plan string) error {
 	// log.Printf("%s: %s\n", operator, plan)
 
 	var subQuery string
@@ -116,7 +115,7 @@ func parseUDFOperator(operator, plan string) (map[string]*RelationShip, error) {
 
 		// 跳过不必要的SQL，没啥解析的价值
 		if subQuery == "select clock_timestamp()" {
-			return nil, nil
+			return nil
 		}
 
 	case "PLpgSQL_stmt_dynexecute":
@@ -125,30 +124,31 @@ func parseUDFOperator(operator, plan string) (map[string]*RelationShip, error) {
 
 	}
 
-	m, err := Parse(subQuery)
-	if err != nil {
+	if err := parseSQL(relationShip, subQuery); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func Parse(sql string) (map[string]*RelationShip, error) {
+	relationShip := make(map[string]*RelationShip)
+
+	if err := parseSQL(relationShip, sql); err != nil {
 		return nil, err
 	}
 
-	return m, nil
+	return relationShip, nil
 }
 
 // 解析独立SQL，不支持关系传递
-func Parse(sql string) (map[string]*RelationShip, error) {
+func parseSQL(relationShip map[string]*RelationShip, sql string) error {
 
-	// Debugger
-	// resultJson, err := pg_query.ParseToJSON(sql)
-	// if err != nil {
-	// 	panic(err)
-	// }
-	// fmt.Println(resultJson)
-
+	log.Debugf("%s\n", sql)
 	result, err := pg_query.Parse(sql)
 	if err != nil {
-		return nil, err
+		return err
 	}
-
-	m := make(map[string]*RelationShip)
 
 	for _, v := range result.Stmts {
 		// 判断为哪种类型SQL
@@ -172,32 +172,32 @@ func Parse(sql string) (map[string]*RelationShip, error) {
 
 		if v.Stmt.GetCreateTableAsStmt() != nil {
 			r := parseSelectStmt(v.Stmt.GetCreateTableAsStmt().GetQuery().GetSelectStmt())
-			m = MergeMap(m, r)
+			maps.Copy(relationShip, r)
 			continue
 		}
 		if v.Stmt.GetSelectStmt() != nil {
 			r := parseSelectStmt(v.Stmt.GetSelectStmt())
-			m = MergeMap(m, r)
+			maps.Copy(relationShip, r)
 			continue
 		}
 		if v.Stmt.GetInsertStmt() != nil {
 			r := parseSelectStmt(v.Stmt.GetInsertStmt().GetSelectStmt().GetSelectStmt())
-			m = MergeMap(m, r)
+			maps.Copy(relationShip, r)
 			continue
 		}
 		if v.Stmt.GetDeleteStmt() != nil {
 			r := parseDeleteStmt(v.Stmt.GetDeleteStmt())
-			m = MergeMap(m, r)
+			maps.Copy(relationShip, r)
 			continue
 		}
 		if v.Stmt.GetUpdateStmt() != nil {
 			r := parseUpdateStmt(v.Stmt.GetUpdateStmt())
-			m = MergeMap(m, r)
+			maps.Copy(relationShip, r)
 			continue
 		}
 	}
 
-	return m, nil
+	return nil
 }
 
 func parseSelectStmt(selectStmt *pg_query.SelectStmt) map[string]*RelationShip {
@@ -206,19 +206,19 @@ func parseSelectStmt(selectStmt *pg_query.SelectStmt) map[string]*RelationShip {
 
 	// 解析 CTE
 	r0 := parseWithClause(selectStmt.GetWithClause(), aliasMap)
-	m = MergeMap(m, r0)
+	maps.Copy(m, r0)
 
 	// 解析 FROM 获取关系
 	// 从 FromClause 中获取 JoinExpr 信息，以便提炼关系
 	// 从 FromClause 中获取别名信息，可能在 WHERE 会用到
 	for _, vv := range selectStmt.GetFromClause() {
 		r1 := parseFromClause(vv, aliasMap)
-		m = MergeMap(m, r1)
+		maps.Copy(m, r1)
 	}
 
 	// 解析 WHERE IN 获取关系
 	r2 := parseWhereClause(selectStmt.GetWhereClause(), aliasMap)
-	m = MergeMap(m, r2)
+	maps.Copy(m, r2)
 
 	return m
 }
@@ -243,12 +243,12 @@ func parseWithClause(withClause *pg_query.WithClause, aliasMap map[string]*Relat
 		// 从 FromClause 中获取别名信息，可能在 WHERE 会用到
 		for _, vv := range v.GetCommonTableExpr().GetCtequery().GetSelectStmt().GetFromClause() {
 			r1 := parseFromClause(vv, aliasMap)
-			m = MergeMap(m, r1)
+			maps.Copy(m, r1)
 		}
 
 		// 解析 WHERE IN 获取关系
 		r2 := parseWhereClause(v.GetCommonTableExpr().GetCtequery().GetSelectStmt().GetWhereClause(), aliasMap)
-		m = MergeMap(m, r2)
+		maps.Copy(m, r2)
 
 		// 记录 CTE 的 Alias
 		r := &Relation{
@@ -299,30 +299,30 @@ func parseRangeVar(node *pg_query.RangeVar, aliasMap map[string]*Relation) map[s
 }
 
 func parseWhereClause(node *pg_query.Node, aliasMap map[string]*Relation) map[string]*RelationShip {
-	var relationShip map[string]*RelationShip
+	m := make(map[string]*RelationShip)
 
 	if node.GetSubLink() != nil { // in
-		relationShip = parseSubLink(node.GetSubLink(), pg_query.JoinType_JOIN_INNER, aliasMap)
+		m = parseSubLink(node.GetSubLink(), pg_query.JoinType_JOIN_INNER, aliasMap)
 	} else if node.GetBoolExpr() != nil {
-		relationShip = parseBoolExpr(node.GetBoolExpr(), pg_query.JoinType_JOIN_INNER, aliasMap)
+		m = parseBoolExpr(node.GetBoolExpr(), pg_query.JoinType_JOIN_INNER, aliasMap)
 	}
 
-	return relationShip
+	return m
 }
 
 func parseSubLink(node *pg_query.SubLink, jointype pg_query.JoinType, aliasMap map[string]*Relation) map[string]*RelationShip {
-	var relationShip map[string]*RelationShip
+	m := make(map[string]*RelationShip)
 
 	switch node.GetSubLinkType() {
 	case pg_query.SubLinkType_ANY_SUBLINK:
-		relationShip = parseAnySubLink(node, jointype, aliasMap)
+		m = parseAnySubLink(node, jointype, aliasMap)
 	// case :
 	// 扩展...
 	default:
 		fmt.Printf("node.GetSubLinkType(): %s\n", node.GetSubLinkType())
 	}
 
-	return relationShip
+	return m
 }
 
 func parseAnySubLink(node *pg_query.SubLink, jointype pg_query.JoinType, aliasMap map[string]*Relation) map[string]*RelationShip {
@@ -379,23 +379,23 @@ func parseJoinClause(node *pg_query.Node, aliasMap map[string]*Relation) map[str
 	// 优先遍历内层JOIN
 	if j.GetLarg().GetJoinExpr() != nil {
 		lSubRelationShip := parseJoinClause(j.GetLarg(), aliasMap)
-		m = MergeMap(m, lSubRelationShip)
+		maps.Copy(m, lSubRelationShip)
 	}
 	if j.GetRarg().GetJoinExpr() != nil {
 		rSubRelationShip := parseJoinClause(j.GetRarg(), aliasMap)
-		m = MergeMap(m, rSubRelationShip)
+		maps.Copy(m, rSubRelationShip)
 	}
 	// 处理子查询
 	if j.GetLarg().GetRangeSubselect() != nil {
 		// 解析 FROM
 		for _, vv := range j.GetLarg().GetRangeSubselect().GetSubquery().GetSelectStmt().GetFromClause() {
 			r1 := parseFromClause(vv, aliasMap)
-			m = MergeMap(m, r1)
+			maps.Copy(m, r1)
 		}
 
 		// 解析 WHERE IN 获取关系
 		r2 := parseWhereClause(j.GetLarg().GetRangeSubselect().GetSubquery().GetSelectStmt().GetWhereClause(), aliasMap)
-		m = MergeMap(m, r2)
+		maps.Copy(m, r2)
 
 		// 记录 SubQuery 的 Alias
 		r := &Relation{
@@ -408,12 +408,12 @@ func parseJoinClause(node *pg_query.Node, aliasMap map[string]*Relation) map[str
 		// 解析 FROM
 		for _, vv := range j.GetRarg().GetRangeSubselect().GetSubquery().GetSelectStmt().GetFromClause() {
 			r1 := parseFromClause(vv, aliasMap)
-			m = MergeMap(m, r1)
+			maps.Copy(m, r1)
 		}
 
 		// 解析 WHERE IN 获取关系
 		r2 := parseWhereClause(j.GetRarg().GetRangeSubselect().GetSubquery().GetSelectStmt().GetWhereClause(), aliasMap)
-		m = MergeMap(m, r2)
+		maps.Copy(m, r2)
 
 		// 记录 SubQuery 的 Alias
 		r := &Relation{
@@ -430,7 +430,7 @@ func parseJoinClause(node *pg_query.Node, aliasMap map[string]*Relation) map[str
 	}
 	// 记录关系
 	currRelationShip := parseQuals(j, aliasMap)
-	m = MergeMap(m, currRelationShip)
+	maps.Copy(m, currRelationShip)
 
 	return m
 }
@@ -440,27 +440,27 @@ func parseQuals(node *pg_query.JoinExpr, aliasMap map[string]*Relation) map[stri
 		return nil
 	}
 
-	var relationShip map[string]*RelationShip
+	m := make(map[string]*RelationShip)
 
 	if node.GetQuals().GetAExpr() != nil {
-		relationShip = parseAExpr(node.GetQuals().GetAExpr(), node.GetJointype(), aliasMap)
+		m = parseAExpr(node.GetQuals().GetAExpr(), node.GetJointype(), aliasMap)
 	} else if node.GetQuals().GetBoolExpr() != nil {
-		relationShip = parseBoolExpr(node.GetQuals().GetBoolExpr(), node.GetJointype(), aliasMap)
+		m = parseBoolExpr(node.GetQuals().GetBoolExpr(), node.GetJointype(), aliasMap)
 	}
 	// ...
 
-	return relationShip
+	return m
 }
 
 func parseBoolExpr(expr *pg_query.BoolExpr, joinType pg_query.JoinType, aliasMap map[string]*Relation) map[string]*RelationShip {
 	m := make(map[string]*RelationShip)
 	for _, v := range expr.GetArgs() {
 		if v.GetAExpr() != nil {
-			m = MergeMap(m, parseAExpr(v.GetAExpr(), joinType, aliasMap))
+			maps.Copy(m, parseAExpr(v.GetAExpr(), joinType, aliasMap))
 		} else if v.GetSubLink() != nil { // in
-			m = MergeMap(m, parseSubLink(v.GetSubLink(), joinType, aliasMap))
+			maps.Copy(m, parseSubLink(v.GetSubLink(), joinType, aliasMap))
 		} else if v.GetBoolExpr() != nil {
-			m = MergeMap(m, parseBoolExpr(v.GetBoolExpr(), joinType, aliasMap))
+			maps.Copy(m, parseBoolExpr(v.GetBoolExpr(), joinType, aliasMap))
 		}
 	}
 	return m
@@ -529,14 +529,4 @@ func parseAExpr(expr *pg_query.A_Expr, joinType pg_query.JoinType, aliasMap map[
 func Hash(s *RelationShip) string {
 	data, _ := json.Marshal(s)
 	return fmt.Sprintf("%x", md5.Sum(data))
-}
-
-func MergeMap(mObj ...map[string]*RelationShip) map[string]*RelationShip {
-	newObj := make(map[string]*RelationShip)
-	for _, m := range mObj {
-		for k, v := range m {
-			newObj[k] = v
-		}
-	}
-	return newObj
 }
