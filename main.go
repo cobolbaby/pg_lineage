@@ -182,7 +182,8 @@ func main() {
 		log.Errorf("ERD err: %s ", err)
 	}
 
-	// TODO:查询所有的节点，获取所有表信息，将其插入到图数据库中
+	// 查询所有表的使用信息，更新图数据库中的节点信息
+	completeLineageGraphInfo(ds, driver)
 
 }
 
@@ -361,4 +362,55 @@ func GetUDFDefinition(db *sql.DB, udf *lineage.Op) (string, error) {
 	}
 
 	return definition, nil
+}
+
+func completeLineageGraphInfo(ds *DataSource, driver neo4j.Driver) {
+
+	rows, err := ds.DB.Query("SELECT relname, schemaname, seq_scan FROM pg_stat_user_tables")
+	if err != nil {
+		log.Fatalf("Unable to execute query: %v\n", err)
+	}
+	defer rows.Close()
+
+	// Update data in Neo4j
+	session := driver.NewSession(neo4j.SessionConfig{})
+	defer session.Close()
+
+	for rows.Next() {
+		var relname, schemaName string
+		var seqScan int
+		err := rows.Scan(&relname, &schemaName, &seqScan)
+		if err != nil {
+			log.Fatalf("Error scanning row: %v\n", err)
+		}
+
+		// Create or update Neo4j node with PostgreSQL data
+		cypher := `
+			MERGE (n:Lineage:` + schemaName + ` {id: $id})
+			ON CREATE SET n.database = $database, n.schemaname = $schemaname, n.relname = $relname, n.udt = timestamp(), n.seq_scan = $seq_scan
+			ON MATCH SET n.udt = timestamp(), n.seq_scan = $seq_scan
+		`
+		_, err = session.WriteTransaction(func(transaction neo4j.Transaction) (interface{}, error) {
+			result, err := transaction.Run(cypher, map[string]interface{}{
+				"id":         ds.Alias + "." + schemaName + "." + relname,
+				"database":   ds.Alias,
+				"schemaname": schemaName,
+				"relname":    relname,
+				"seq_scan":   seqScan, // Set your value for visited
+			})
+			if err != nil {
+				return nil, err
+			}
+			return result.Consume()
+		})
+		if err != nil {
+			log.Fatalf("Error creating/updating Neo4j node: %v\n", err)
+		}
+	}
+
+	// if err := rows.Err(); err != nil {
+	// 	log.Fatalf("Error iterating rows: %v\n", err)
+	// }
+
+	log.Info("Data updated successfully in Neo4j.")
 }
