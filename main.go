@@ -10,10 +10,11 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/cobolbaby/lineage/internal/erd"
-	"github.com/cobolbaby/lineage/internal/lineage"
-	"github.com/cobolbaby/lineage/pkg/depgraph"
-	"github.com/cobolbaby/lineage/pkg/log"
+	"pg_lineage/internal/erd"
+	"pg_lineage/internal/lineage"
+	"pg_lineage/pkg/depgraph"
+	"pg_lineage/pkg/log"
+
 	_ "github.com/lib/pq"
 	"github.com/neo4j/neo4j-go-driver/v4/neo4j"
 	"github.com/spf13/viper"

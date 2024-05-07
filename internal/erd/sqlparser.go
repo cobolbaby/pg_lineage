@@ -6,7 +6,8 @@ import (
 	"fmt"
 	"maps"
 
-	"github.com/cobolbaby/lineage/pkg/log"
+	"pg_lineage/pkg/log"
+
 	pg_query "github.com/pganalyze/pg_query_go/v5"
 	"github.com/tidwall/gjson"
 )

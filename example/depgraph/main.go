@@ -5,7 +5,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cobolbaby/lineage/pkg/depgraph"
+	"pg_lineage/pkg/depgraph"
+
 	"github.com/mitchellh/copystructure"
 )
 

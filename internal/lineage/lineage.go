@@ -3,8 +3,9 @@ package lineage
 import (
 	"strings"
 
-	"github.com/cobolbaby/lineage/pkg/depgraph"
-	"github.com/cobolbaby/lineage/pkg/log"
+	"pg_lineage/pkg/depgraph"
+	"pg_lineage/pkg/log"
+
 	"github.com/neo4j/neo4j-go-driver/v4/neo4j"
 )
 

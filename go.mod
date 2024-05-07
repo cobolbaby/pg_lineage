@@ -1,4 +1,4 @@
-module github.com/cobolbaby/lineage
+module pg_lineage
 
 go 1.21
 
