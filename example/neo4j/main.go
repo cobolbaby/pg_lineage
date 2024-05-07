@@ -57,7 +57,7 @@ func main() {
 				"database":   "postgres",
 				"schemaname": schemaName,
 				"relname":    relname,
-				"seq_scan":   seqScan, // Set your value for visited
+				"seq_scan":   seqScan, // Set your value for seq_scan
 			})
 			if err != nil {
 				return nil, err

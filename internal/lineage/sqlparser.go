@@ -39,7 +39,7 @@ type Record struct {
 	Type       string
 	Columns    []string
 	Comment    string
-	Visited    string
+	Visited    int32
 	Size       int64
 	Layer      string
 	Database   string
@@ -47,6 +47,7 @@ type Record struct {
 	CreateTime time.Time
 	Labels     []string
 	ID         string
+	SeqScan    int32
 }
 
 func (r *Record) GetID() string {

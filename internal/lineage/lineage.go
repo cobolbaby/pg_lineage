@@ -9,14 +9,7 @@ import (
 	"github.com/neo4j/neo4j-go-driver/v4/neo4j"
 )
 
-func ResetGraph(driver neo4j.Driver) error {
-	// Sessions are short-lived, cheap to create and NOT thread safe. Typically create one or more sessions
-	// per request in your web application. Make sure to call Close on the session when done.
-	// For multi-database support, set sessionConfig.DatabaseName to requested database
-	// Session config will default to write mode, if only reads are to be used configure session for
-	// read mode.
-	session := driver.NewSession(neo4j.SessionConfig{})
-	defer session.Close()
+func ResetGraph(session neo4j.Session) error {
 
 	_, err := session.WriteTransaction(func(tx neo4j.Transaction) (interface{}, error) {
 		return tx.Run("MATCH (n:Lineage) DETACH DELETE n", nil)
@@ -25,14 +18,7 @@ func ResetGraph(driver neo4j.Driver) error {
 	return err
 }
 
-func CreateGraph(driver neo4j.Driver, graph *depgraph.Graph, extends *Op) error {
-	// Sessions are short-lived, cheap to create and NOT thread safe. Typically create one or more sessions
-	// per request in your web application. Make sure to call Close on the session when done.
-	// For multi-database support, set sessionConfig.DatabaseName to requested database
-	// Session config will default to write mode, if only reads are to be used configure session for
-	// read mode.
-	session := driver.NewSession(neo4j.SessionConfig{})
-	defer session.Close()
+func CreateGraph(session neo4j.Session, graph *depgraph.Graph, extends *Op) error {
 
 	log.Infof("ShrinkGraph: %+v", graph)
 	for i, layer := range graph.TopoSortedLayers() {
@@ -91,9 +77,9 @@ func CreateNode(tx neo4j.Transaction, r *Record) (*Record, error) {
 	`,
 		map[string]interface{}{
 			"id":         r.Database + "." + r.GetID(),
+			"database":   r.Database,
 			"schemaname": r.SchemaName,
 			"relname":    r.RelName,
-			"database":   r.Database,
 			"size":       r.Size,
 			"visited":    r.Visited,
 		})
@@ -127,4 +113,27 @@ func CreateEdge(tx neo4j.Transaction, r *Op) (*Op, error) {
 	})
 
 	return nil, err
+}
+
+func CompleteLineageGraphInfo(session neo4j.Session, r *Record) error {
+	// Create or update Neo4j node with PostgreSQL data
+	cypher := `
+		MERGE (n:Lineage:` + r.SchemaName + ` {id: $id})
+		ON CREATE SET n.database = $database, n.schemaname = $schemaname, n.relname = $relname, n.udt = timestamp(), n.seq_scan = $seq_scan
+		ON MATCH SET n.udt = timestamp(), n.seq_scan = $seq_scan
+	`
+	_, err := session.WriteTransaction(func(transaction neo4j.Transaction) (interface{}, error) {
+		result, err := transaction.Run(cypher, map[string]interface{}{
+			"id":         r.Database + "." + r.GetID(),
+			"database":   r.Database,
+			"schemaname": r.SchemaName,
+			"relname":    r.RelName,
+			"seq_scan":   r.SeqScan, // Set your value for seq_scan
+		})
+		if err != nil {
+			return nil, err
+		}
+		return result.Consume()
+	})
+	return err
 }

@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"maps"
 	"net/url"
 	"os"
 	"regexp"
@@ -145,11 +144,19 @@ func main() {
 	// bound by the application lifetime, which usually implies one driver instance per application
 	defer driver.Close()
 
+	// Sessions are short-lived, cheap to create and NOT thread safe. Typically create one or more sessions
+	// per request in your web application. Make sure to call Close on the session when done.
+	// For multi-database support, set sessionConfig.DatabaseName to requested database
+	// Session config will default to write mode, if only reads are to be used configure session for
+	// read mode.
+	session := driver.NewSession(neo4j.SessionConfig{})
+	defer session.Close()
+
 	// 每次都是重建整张图，避免重复写入，后期可以考虑优化
-	if err := lineage.ResetGraph(driver); err != nil {
+	if err := lineage.ResetGraph(session); err != nil {
 		log.Fatal("ResetGraph err: ", err)
 	}
-	if err := erd.ResetGraph(driver); err != nil {
+	if err := erd.ResetGraph(session); err != nil {
 		log.Fatal("ResetGraph err: ", err)
 	}
 
@@ -168,28 +175,28 @@ func main() {
 		_ = querys.Scan(&qs.Query, &qs.Calls, &qs.TotalTime, &qs.MinTime, &qs.MaxTime, &qs.MeanTime)
 
 		// 生成血缘图，因为图里面边的信息附带了udf属性，所以不能一次性往图数据库里面写入
-		generateTableLineage(&qs, ds, driver)
+		generateTableLineage(&qs, ds, session)
 
 		// 为了避免重复插入，写入前依赖 MAP 特性做一次去重，并且最后一次性入库
-		r := generateTableJoinRelation(&qs, ds, driver)
-		maps.Copy(m, r)
+		// r := generateTableJoinRelation(&qs, ds, session)
+		// maps.Copy(m, r)
 
 		// 扩展别的图.
 	}
 
 	// 一次性入库...
-	if err := erd.CreateGraph(driver, m); err != nil {
+	if err := erd.CreateGraph(session, m); err != nil {
 		log.Errorf("ERD err: %s ", err)
 	}
 
 	// 查询所有表的使用信息，更新图数据库中的节点信息
-	completeLineageGraphInfo(ds, driver)
+	completeLineageGraphInfo(ds, session)
 
 }
 
 // 生成一张 JOIN 图
 // 可以推导出关联关系的有 IN / JOIN
-func generateTableJoinRelation(qs *QueryStore, ds *DataSource, driver neo4j.Driver) map[string]*erd.RelationShip {
+func generateTableJoinRelation(qs *QueryStore, ds *DataSource, session neo4j.Session) map[string]*erd.RelationShip {
 	log.Debugf("generateTableJoinRelation sql: %s", qs.Query)
 
 	var m map[string]*erd.RelationShip
@@ -217,7 +224,7 @@ func generateTableJoinRelation(qs *QueryStore, ds *DataSource, driver neo4j.Driv
 }
 
 // 生成表血缘关系图
-func generateTableLineage(qs *QueryStore, ds *DataSource, driver neo4j.Driver) {
+func generateTableLineage(qs *QueryStore, ds *DataSource, session neo4j.Session) {
 
 	// 一个 UDF 一张图
 	udf, err := IdentifyFuncCall(qs.Query)
@@ -244,7 +251,7 @@ func generateTableLineage(qs *QueryStore, ds *DataSource, driver neo4j.Driver) {
 	sqlTree.SetNamespace(ds.Alias)
 	// 完善辅助信息
 
-	if err := lineage.CreateGraph(driver, sqlTree.ShrinkGraph(), udf); err != nil {
+	if err := lineage.CreateGraph(session, sqlTree.ShrinkGraph(), udf); err != nil {
 		log.Errorf("UDF CreateGraph err: %s ", err)
 	}
 }
@@ -364,17 +371,13 @@ func GetUDFDefinition(db *sql.DB, udf *lineage.Op) (string, error) {
 	return definition, nil
 }
 
-func completeLineageGraphInfo(ds *DataSource, driver neo4j.Driver) {
+func completeLineageGraphInfo(ds *DataSource, session neo4j.Session) {
 
 	rows, err := ds.DB.Query("SELECT relname, schemaname, seq_scan FROM pg_stat_user_tables")
 	if err != nil {
 		log.Fatalf("Unable to execute query: %v\n", err)
 	}
 	defer rows.Close()
-
-	// Update data in Neo4j
-	session := driver.NewSession(neo4j.SessionConfig{})
-	defer session.Close()
 
 	for rows.Next() {
 		var relname, schemaName string
@@ -384,33 +387,17 @@ func completeLineageGraphInfo(ds *DataSource, driver neo4j.Driver) {
 			log.Fatalf("Error scanning row: %v\n", err)
 		}
 
-		// Create or update Neo4j node with PostgreSQL data
-		cypher := `
-			MERGE (n:Lineage:` + schemaName + ` {id: $id})
-			ON CREATE SET n.database = $database, n.schemaname = $schemaname, n.relname = $relname, n.udt = timestamp(), n.seq_scan = $seq_scan
-			ON MATCH SET n.udt = timestamp(), n.seq_scan = $seq_scan
-		`
-		_, err = session.WriteTransaction(func(transaction neo4j.Transaction) (interface{}, error) {
-			result, err := transaction.Run(cypher, map[string]interface{}{
-				"id":         ds.Alias + "." + schemaName + "." + relname,
-				"database":   ds.Alias,
-				"schemaname": schemaName,
-				"relname":    relname,
-				"seq_scan":   seqScan, // Set your value for visited
-			})
-			if err != nil {
-				return nil, err
-			}
-			return result.Consume()
+		err = lineage.CompleteLineageGraphInfo(session, &lineage.Record{
+			Database:   ds.Alias,
+			SchemaName: schemaName,
+			RelName:    relname,
+			SeqScan:    int32(seqScan),
 		})
 		if err != nil {
-			log.Fatalf("Error creating/updating Neo4j node: %v\n", err)
+			log.Fatalf("Error updating Neo4j: %v\n", err)
 		}
-	}
 
-	// if err := rows.Err(); err != nil {
-	// 	log.Fatalf("Error iterating rows: %v\n", err)
-	// }
+	}
 
 	log.Info("Data updated successfully in Neo4j.")
 }
