@@ -161,15 +161,17 @@ func parseSQL(relationShip map[string]*RelationShip, sql string) error {
 		// insert  解析 select 子句
 		// delete  仅解析关联删除
 		// update  仅解析关联更新
-		// create  解析 select 子句
+		// create table ... as ... 解析 select 子句
 		// select  解析
 		// set     跳过
+		// create table ... 跳过
 
 		if v.Stmt.GetTruncateStmt() != nil ||
 			v.Stmt.GetDropStmt() != nil ||
 			v.Stmt.GetVacuumStmt() != nil ||
 			v.Stmt.GetIndexStmt() != nil ||
-			v.Stmt.GetVariableSetStmt() != nil {
+			v.Stmt.GetVariableSetStmt() != nil ||
+			v.Stmt.GetCreateStmt() != nil {
 			continue
 		}
 
@@ -208,8 +210,13 @@ func parseSelectStmt(selectStmt *pg_query.SelectStmt) map[string]*RelationShip {
 	m := make(map[string]*RelationShip)
 
 	// 解析 CTE
-	r0 := parseWithClause(selectStmt.GetWithClause(), aliasMap)
-	maps.Copy(m, r0)
+	if selectStmt.GetWithClause() != nil {
+		r0 := parseWithClause(selectStmt.GetWithClause(), aliasMap)
+		maps.Copy(m, r0)
+	}
+
+	// TODO:解析 UNION
+	// ...
 
 	// 解析 FROM 获取关系
 	// 从 FromClause 中获取 JoinExpr 信息，以便提炼关系
@@ -265,15 +272,17 @@ func parseWithClause(withClause *pg_query.WithClause, aliasMap map[string]*Relat
 }
 
 func parseFromClause(node *pg_query.Node, aliasMap map[string]*Relation) map[string]*RelationShip {
-	// 包含 JOIN
+	// 单表查询
+	if node.GetRangeVar() != nil {
+		return parseRangeVar(node.GetRangeVar(), aliasMap)
+	}
+
+	// 关联查询
 	if node.GetJoinExpr() != nil {
 		return parseJoinClause(node.GetJoinExpr(), aliasMap)
 	}
 
-	// 只是简单的一张表
-	if node.GetRangeVar() != nil {
-		return parseRangeVar(node.GetRangeVar(), aliasMap)
-	}
+	// TODO:子查询
 
 	// TODO:调用 UDF，获取返回值
 	// ...
@@ -299,75 +308,6 @@ func parseRangeVar(node *pg_query.RangeVar, aliasMap map[string]*Relation) map[s
 	aliasMap[lRelation.Alias] = lRelation
 
 	return nil
-}
-
-func parseWhereClause(node *pg_query.Node, aliasMap map[string]*Relation) map[string]*RelationShip {
-	m := make(map[string]*RelationShip)
-
-	if node.GetSubLink() != nil { // in
-		m = parseSubLink(node.GetSubLink(), pg_query.JoinType_JOIN_INNER, aliasMap)
-	} else if node.GetBoolExpr() != nil {
-		m = parseBoolExpr(node.GetBoolExpr(), pg_query.JoinType_JOIN_INNER, aliasMap)
-	}
-
-	return m
-}
-
-func parseSubLink(node *pg_query.SubLink, jointype pg_query.JoinType, aliasMap map[string]*Relation) map[string]*RelationShip {
-	m := make(map[string]*RelationShip)
-
-	switch node.GetSubLinkType() {
-	case pg_query.SubLinkType_ANY_SUBLINK:
-		m = parseAnySubLink(node, jointype, aliasMap)
-	// case :
-	// 扩展...
-	default:
-		fmt.Printf("node.GetSubLinkType(): %s\n", node.GetSubLinkType())
-	}
-
-	return m
-}
-
-func parseAnySubLink(node *pg_query.SubLink, jointype pg_query.JoinType, aliasMap map[string]*Relation) map[string]*RelationShip {
-	// fmt.Printf("parseAnySubLink: %s", node)
-
-	// 跳过 func(alias.name) IN (SELECT col FROM ...) 类似的SQL，变化太多，不考虑
-	if node.GetTestexpr().GetFuncCall() != nil {
-		return nil
-	}
-	// 跳过 alias.name IN (SELECT func(col) FROM ...)
-	if node.GetSubselect().GetSelectStmt().GetTargetList()[0].GetResTarget().GetVal().GetFuncCall() != nil {
-		return nil
-	}
-	// 跳过 name IN (SELECT col FROM ...)，字段不知道是哪个表的
-	if len(node.GetTestexpr().GetColumnRef().GetFields()) < 2 {
-		return nil
-	}
-
-	relationship := &RelationShip{}
-
-	lrel := aliasMap[node.GetTestexpr().GetColumnRef().GetFields()[0].GetString_().GetSval()]
-	relationship.SColumn = &Column{
-		Schema:  lrel.Schema,
-		RelName: lrel.RelName,
-		Field:   node.GetTestexpr().GetColumnRef().GetFields()[1].GetString_().GetSval(),
-	}
-
-	rrel := node.GetSubselect().GetSelectStmt().GetFromClause()[0].GetRangeVar()
-	relationship.TColumn = &Column{
-		Schema:  rrel.GetSchemaname(),
-		RelName: rrel.GetRelname(),
-		Field:   node.GetSubselect().GetSelectStmt().GetTargetList()[0].GetResTarget().GetVal().GetColumnRef().GetFields()[0].GetString_().GetSval(),
-	}
-
-	relationship.Type = jointype.String()
-
-	// checksum
-	m := make(map[string]*RelationShip)
-	key := Hash(relationship)
-	m[key] = relationship
-
-	return m
 }
 
 // 返回左右表间的关系，所以主体有两个表，外加关系，多张表的话，则需要返回子结果集
@@ -440,9 +380,11 @@ func parseQuals(node *pg_query.JoinExpr, aliasMap map[string]*Relation) map[stri
 
 	m := make(map[string]*RelationShip)
 
-	if node.GetQuals().GetAExpr() != nil {
+	if node.GetQuals().GetAExpr() != nil { // on A.? = B.? and A.? = B.?
 		m = parseAExpr(node.GetQuals().GetAExpr(), node.GetJointype(), aliasMap)
-	} else if node.GetQuals().GetBoolExpr() != nil {
+	} else if node.GetQuals().GetSubLink() != nil { // A.? in (select B.? from B)
+		m = parseSubLink(node.GetQuals().GetSubLink(), node.GetJointype(), aliasMap)
+	} else if node.GetQuals().GetBoolExpr() != nil { // (A.? = B.? and/or A.? = B.?) and ...
 		m = parseBoolExpr(node.GetQuals().GetBoolExpr(), node.GetJointype(), aliasMap)
 	}
 	// ...
@@ -450,12 +392,84 @@ func parseQuals(node *pg_query.JoinExpr, aliasMap map[string]*Relation) map[stri
 	return m
 }
 
+func parseWhereClause(node *pg_query.Node, aliasMap map[string]*Relation) map[string]*RelationShip {
+	m := make(map[string]*RelationShip)
+
+	if node.GetSubLink() != nil { // A.? in (select B.? from B)
+		m = parseSubLink(node.GetSubLink(), pg_query.JoinType_JOIN_INNER, aliasMap)
+	} else if node.GetBoolExpr() != nil { // (A.? = B.? and/or A.? = B.?) and ...
+		m = parseBoolExpr(node.GetBoolExpr(), pg_query.JoinType_JOIN_INNER, aliasMap)
+		// } else if node.GetAExpr() != nil { // on A.? = B.? and A.? = B.?
+		// 	m = parseAExpr(node.GetAExpr(), pg_query.JoinType_JOIN_INNER, aliasMap)
+	}
+
+	return m
+}
+
+func parseSubLink(node *pg_query.SubLink, jointype pg_query.JoinType, aliasMap map[string]*Relation) map[string]*RelationShip {
+	m := make(map[string]*RelationShip)
+
+	switch node.GetSubLinkType() {
+	case pg_query.SubLinkType_ANY_SUBLINK:
+		m = parseAnySubLink(node, jointype, aliasMap)
+	// case :
+	// 扩展...
+	default:
+		fmt.Printf("node.GetSubLinkType(): %s\n", node.GetSubLinkType())
+	}
+
+	return m
+}
+
+func parseAnySubLink(node *pg_query.SubLink, jointype pg_query.JoinType, aliasMap map[string]*Relation) map[string]*RelationShip {
+	// fmt.Printf("parseAnySubLink: %s", node)
+
+	// 跳过 func(A.?) IN (SELECT B.? FROM B) 类似的SQL，变化太多，不考虑
+	if node.GetTestexpr().GetFuncCall() != nil {
+		return nil
+	}
+	// 跳过 A.? IN (SELECT func(B.?) FROM B)
+	if len(node.GetSubselect().GetSelectStmt().GetTargetList()) > 0 &&
+		node.GetSubselect().GetSelectStmt().GetTargetList()[0].GetResTarget().GetVal().GetFuncCall() != nil {
+		return nil
+	}
+	// 跳过 A.? IN (SELECT ? FROM ...) ? 前不带表的别名
+	if len(node.GetTestexpr().GetColumnRef().GetFields()) < 2 {
+		return nil
+	}
+
+	relationship := &RelationShip{}
+
+	lrel := aliasMap[node.GetTestexpr().GetColumnRef().GetFields()[0].GetString_().GetSval()]
+	relationship.SColumn = &Column{
+		Schema:  lrel.Schema,
+		RelName: lrel.RelName,
+		Field:   node.GetTestexpr().GetColumnRef().GetFields()[1].GetString_().GetSval(),
+	}
+
+	rrel := node.GetSubselect().GetSelectStmt().GetFromClause()[0].GetRangeVar()
+	relationship.TColumn = &Column{
+		Schema:  rrel.GetSchemaname(),
+		RelName: rrel.GetRelname(),
+		Field:   node.GetSubselect().GetSelectStmt().GetTargetList()[0].GetResTarget().GetVal().GetColumnRef().GetFields()[0].GetString_().GetSval(),
+	}
+
+	relationship.Type = jointype.String()
+
+	// checksum
+	m := make(map[string]*RelationShip)
+	key := Hash(relationship)
+	m[key] = relationship
+
+	return m
+}
+
 func parseBoolExpr(expr *pg_query.BoolExpr, joinType pg_query.JoinType, aliasMap map[string]*Relation) map[string]*RelationShip {
 	m := make(map[string]*RelationShip)
 	for _, v := range expr.GetArgs() {
-		if v.GetAExpr() != nil {
+		if v.GetAExpr() != nil { // on A.? = B.? and A.? = B.?
 			maps.Copy(m, parseAExpr(v.GetAExpr(), joinType, aliasMap))
-		} else if v.GetSubLink() != nil { // in
+		} else if v.GetSubLink() != nil { // A.? in (select B.? from B)
 			maps.Copy(m, parseSubLink(v.GetSubLink(), joinType, aliasMap))
 		} else if v.GetBoolExpr() != nil {
 			maps.Copy(m, parseBoolExpr(v.GetBoolExpr(), joinType, aliasMap))
