@@ -249,7 +249,6 @@ func generateTableLineage(qs *QueryStore, ds *DataSource, session neo4j.Session)
 
 	// 设置所属命名空间，避免节点冲突
 	sqlTree.SetNamespace(ds.Alias)
-	// 完善辅助信息
 
 	if err := lineage.CreateGraph(session, sqlTree.ShrinkGraph(), udf); err != nil {
 		log.Errorf("UDF CreateGraph err: %s ", err)
@@ -373,16 +372,19 @@ func GetUDFDefinition(db *sql.DB, udf *lineage.Op) (string, error) {
 
 func completeLineageGraphInfo(ds *DataSource, session neo4j.Session) {
 
-	rows, err := ds.DB.Query("SELECT relname, schemaname, seq_scan FROM pg_stat_user_tables")
+	rows, err := ds.DB.Query(`
+		SELECT relname, schemaname, seq_scan, obj_description(relid) as comment
+		FROM pg_stat_user_tables
+	`)
 	if err != nil {
 		log.Fatalf("Unable to execute query: %v\n", err)
 	}
 	defer rows.Close()
 
 	for rows.Next() {
-		var relname, schemaName string
+		var relname, schemaName, comment string
 		var seqScan int
-		err := rows.Scan(&relname, &schemaName, &seqScan)
+		err := rows.Scan(&relname, &schemaName, &seqScan, &comment)
 		if err != nil {
 			log.Fatalf("Error scanning row: %v\n", err)
 		}
@@ -392,6 +394,7 @@ func completeLineageGraphInfo(ds *DataSource, session neo4j.Session) {
 			SchemaName: schemaName,
 			RelName:    relname,
 			SeqScan:    int32(seqScan),
+			Comment:    comment,
 		})
 		if err != nil {
 			log.Fatalf("Error updating Neo4j: %v\n", err)

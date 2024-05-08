@@ -3,8 +3,8 @@ package main
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"log"
+	"pg_lineage/internal/lineage"
 
 	_ "github.com/lib/pq"
 	"github.com/neo4j/neo4j-go-driver/v4/neo4j"
@@ -45,24 +45,11 @@ func main() {
 			log.Fatalf("Error scanning row: %v\n", err)
 		}
 
-		// Create or update Neo4j node with PostgreSQL data
-		cypher := `
-			MERGE (n:Lineage:` + schemaName + ` {id: $id})
-			ON CREATE SET n.database = $database, n.schemaname = $schemaname, n.relname = $relname, n.udt = timestamp(), n.seq_scan = $seq_scan
-			ON MATCH SET n.udt = timestamp(), n.seq_scan = $seq_scan
-		`
-		_, err = session.WriteTransaction(func(transaction neo4j.Transaction) (interface{}, error) {
-			result, err := transaction.Run(cypher, map[string]interface{}{
-				"id":         "postgres" + "." + schemaName + "." + relname,
-				"database":   "postgres",
-				"schemaname": schemaName,
-				"relname":    relname,
-				"seq_scan":   seqScan, // Set your value for seq_scan
-			})
-			if err != nil {
-				return nil, err
-			}
-			return result.Consume()
+		err = lineage.CompleteLineageGraphInfo(session, &lineage.Record{
+			Database:   "postgres",
+			SchemaName: schemaName,
+			RelName:    relname,
+			SeqScan:    int32(seqScan),
 		})
 		if err != nil {
 			log.Fatalf("Error creating/updating Neo4j node: %v\n", err)
@@ -73,5 +60,5 @@ func main() {
 		log.Fatalf("Error iterating rows: %v\n", err)
 	}
 
-	fmt.Println("Data updated successfully in Neo4j.")
+	log.Println("Data updated successfully in Neo4j.")
 }

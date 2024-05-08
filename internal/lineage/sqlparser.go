@@ -36,10 +36,9 @@ type Owner struct {
 type Record struct {
 	SchemaName string
 	RelName    string
-	Type       string
+	Type       string // 表类型
 	Columns    []string
 	Comment    string
-	Visited    int32
 	Size       int64
 	Layer      string
 	Database   string

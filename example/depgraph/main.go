@@ -14,7 +14,6 @@ type Record struct {
 	Type       string
 	Columns    []string
 	Comment    string
-	Visited    string
 	Size       int64
 	Layer      string
 	Database   string

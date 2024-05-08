@@ -71,8 +71,8 @@ func CreateNode(tx neo4j.Transaction, r *Record) (*Record, error) {
 	// CREATE CONSTRAINT ON (cc:Lineage) ASSERT cc.id IS UNIQUE
 	records, err := tx.Run(`
 		MERGE (n:Lineage:`+r.SchemaName+` {id: $id}) 
-		ON CREATE SET n.database = $database, n.schemaname = $schemaname, n.relname = $relname, n.udt = timestamp(), n.size = $size, n.visited = $visited
-		ON MATCH SET n.udt = timestamp(), n.size = $size, n.visited = $visited
+		ON CREATE SET n.database = $database, n.schemaname = $schemaname, n.relname = $relname, n.udt = timestamp(), n.type = $type
+		ON MATCH SET n.udt = timestamp(), n.type = $type
 		RETURN n.id
 	`,
 		map[string]interface{}{
@@ -80,8 +80,7 @@ func CreateNode(tx neo4j.Transaction, r *Record) (*Record, error) {
 			"database":   r.Database,
 			"schemaname": r.SchemaName,
 			"relname":    r.RelName,
-			"size":       r.Size,
-			"visited":    r.Visited,
+			"type":       r.Type,
 		})
 	// In face of driver native errors, make sure to return them directly.
 	// Depending on the error, the driver may try to execute the function again.
@@ -119,8 +118,8 @@ func CompleteLineageGraphInfo(session neo4j.Session, r *Record) error {
 	// Create or update Neo4j node with PostgreSQL data
 	cypher := `
 		MERGE (n:Lineage:` + r.SchemaName + ` {id: $id})
-		ON CREATE SET n.database = $database, n.schemaname = $schemaname, n.relname = $relname, n.udt = timestamp(), n.seq_scan = $seq_scan
-		ON MATCH SET n.udt = timestamp(), n.seq_scan = $seq_scan
+		ON CREATE SET n.database = $database, n.schemaname = $schemaname, n.relname = $relname, n.udt = timestamp(), n.seq_scan = $seq_scan, n.comment = $comment
+		ON MATCH SET n.udt = timestamp(), n.seq_scan = $seq_scan, n.comment = $comment
 	`
 	_, err := session.WriteTransaction(func(transaction neo4j.Transaction) (interface{}, error) {
 		result, err := transaction.Run(cypher, map[string]interface{}{
@@ -129,6 +128,7 @@ func CompleteLineageGraphInfo(session neo4j.Session, r *Record) error {
 			"schemaname": r.SchemaName,
 			"relname":    r.RelName,
 			"seq_scan":   r.SeqScan, // Set your value for seq_scan
+			"comment":    r.Comment,
 		})
 		if err != nil {
 			return nil, err
