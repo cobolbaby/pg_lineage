@@ -373,7 +373,7 @@ func GetUDFDefinition(db *sql.DB, udf *lineage.Op) (string, error) {
 func completeLineageGraphInfo(ds *DataSource, session neo4j.Session) {
 
 	rows, err := ds.DB.Query(`
-		SELECT relname, schemaname, seq_scan, obj_description(relid) as comment
+		SELECT relname, schemaname, seq_scan, COALESCE(obj_description(relid), '') as comment
 		FROM pg_stat_user_tables
 	`)
 	if err != nil {
