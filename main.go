@@ -112,6 +112,7 @@ func initConfig(cfgFile string) error {
 
 func init() {
 	configFile := flag.String("c", "./config/config.yaml", "path to config.yaml")
+	flag.Parse()
 
 	if err := initConfig(*configFile); err != nil {
 		fmt.Println("initConfig err: ", err)
