@@ -47,6 +47,7 @@ type Record struct {
 	Labels     []string
 	ID         string
 	SeqScan    int32
+	Calls      int64
 }
 
 func (r *Record) GetID() string {
@@ -83,6 +84,7 @@ type Op struct {
 	SrcID      string
 	DestID     string
 	ID         string
+	Calls      int64
 }
 
 func (o *Op) GetID() string {

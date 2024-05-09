@@ -53,7 +53,7 @@ type DataSource struct {
 
 type QueryStore struct {
 	Query     string
-	Calls     uint32
+	Calls     int64
 	TotalTime float64
 	MinTime   float64
 	MaxTime   float64
@@ -236,6 +236,8 @@ func generateTableLineage(qs *QueryStore, ds *DataSource, session neo4j.Session)
 	// 	ProcName:   "func_insert_fact_sn_info_f6",
 	// 	SchemaName: "dw",
 	// }
+	udf.Calls = qs.Calls
+
 	sqlTree, err := HandleUDF4Lineage(ds.DB, udf)
 	if err != nil {
 		log.Errorf("HandleUDF %+v, err: %s", udf, err)

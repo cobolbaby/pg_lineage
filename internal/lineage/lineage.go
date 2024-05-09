@@ -30,6 +30,7 @@ func CreateGraph(session neo4j.Session, graph *depgraph.Graph, extends *Op) erro
 		for _, v := range graph.GetNodes() {
 			r, _ := v.(*Record)
 			r.Database = graph.GetNamespace()
+			r.Calls = extends.Calls
 
 			// fix: ShrinkGraph 中仍然存在临时节点
 			if r.SchemaName == "" {
@@ -71,8 +72,8 @@ func CreateNode(tx neo4j.Transaction, r *Record) (*Record, error) {
 	// CREATE CONSTRAINT ON (cc:Lineage) ASSERT cc.id IS UNIQUE
 	records, err := tx.Run(`
 		MERGE (n:Lineage:`+r.SchemaName+` {id: $id}) 
-		ON CREATE SET n.database = $database, n.schemaname = $schemaname, n.relname = $relname, n.udt = timestamp(), n.type = $type
-		ON MATCH SET n.udt = timestamp(), n.type = $type
+		ON CREATE SET n.database = $database, n.schemaname = $schemaname, n.relname = $relname, n.udt = timestamp(), n.type = $type, n.calls = $calls
+		ON MATCH SET n.udt = timestamp(), n.type = $type, n.calls = n.calls + $calls
 		RETURN n.id
 	`,
 		map[string]interface{}{
@@ -81,6 +82,7 @@ func CreateNode(tx neo4j.Transaction, r *Record) (*Record, error) {
 			"schemaname": r.SchemaName,
 			"relname":    r.RelName,
 			"type":       r.Type,
+			"calls":      r.Calls,
 		})
 	// In face of driver native errors, make sure to return them directly.
 	// Depending on the error, the driver may try to execute the function again.
@@ -100,7 +102,7 @@ func CreateNode(tx neo4j.Transaction, r *Record) (*Record, error) {
 func CreateEdge(tx neo4j.Transaction, r *Op) (*Op, error) {
 	_, err := tx.Run(`
 		MATCH (pnode {id: $pid}), (cnode {id: $cid})
-		CREATE (pnode)-[e:DownStream {id: $id, database: $database, schemaname: $schemaname, procname: $procname}]->(cnode)
+		CREATE (pnode)-[e:DownStream {id: $id, database: $database, schemaname: $schemaname, procname: $procname, calls: $calls, udt: timestamp()}]->(cnode)
 		RETURN e
 	`, map[string]interface{}{
 		"id":         r.Database + "." + r.GetID(),
@@ -109,6 +111,7 @@ func CreateEdge(tx neo4j.Transaction, r *Op) (*Op, error) {
 		"procname":   r.ProcName,
 		"pid":        r.Database + "." + r.SrcID,
 		"cid":        r.Database + "." + r.DestID,
+		"calls":      r.Calls,
 	})
 
 	return nil, err
