@@ -70,6 +70,7 @@ type Config struct {
 		User     string `mapstructure:"user"`
 		Password string `mapstructure:"password"`
 	} `mapstructure:"neo4j"`
+	Log log.LoggerConfig
 }
 
 var config Config
@@ -109,20 +110,20 @@ func initConfig(cfgFile string) error {
 }
 
 func init() {
-	if err := log.InitLogger(&log.LoggerConfig{
-		Level: "debug",
-		Path:  "./logs/lineage.log",
-	}); err != nil {
-		fmt.Println(err)
+	if err := initConfig("./config/config.yaml"); err != nil {
+		fmt.Println("initConfig err: ", err)
 		os.Exit(1)
 	}
 
-	if err := initConfig("./config/config.yaml"); err != nil {
-		log.Fatal("initConfig err: ", err)
+	if err := log.InitLogger(&config.Log); err != nil {
+		fmt.Println(err)
+		os.Exit(1)
 	}
 }
 
 func main() {
+	log.Infof("log level: %s, log file: %s", config.Log.Level, config.Log.Path)
+
 	db, err := sql.Open("postgres", config.Postgres.DSN)
 	if err != nil {
 		log.Fatal("sql.Open err: ", err)
