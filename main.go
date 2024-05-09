@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"errors"
+	"flag"
 	"fmt"
 	"net/url"
 	"os"
@@ -110,7 +111,9 @@ func initConfig(cfgFile string) error {
 }
 
 func init() {
-	if err := initConfig("./config/config.yaml"); err != nil {
+	configFile := flag.String("c", "./config/config.yaml", "path to config.yaml")
+
+	if err := initConfig(*configFile); err != nil {
 		fmt.Println("initConfig err: ", err)
 		os.Exit(1)
 	}
