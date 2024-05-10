@@ -231,23 +231,20 @@ func generateTableJoinRelation(qs *QueryStore, ds *DataSource, session neo4j.Ses
 // 生成表血缘关系图
 func generateTableLineage(qs *QueryStore, ds *DataSource, session neo4j.Session) {
 
-	// 一个 UDF 一张图
-	udf, err := IdentifyFuncCall(qs.Query)
-	if err != nil {
-		return
-	}
-	// udf = &Op{
-	// 	Type:       "plpgsql",
-	// 	ProcName:   "func_insert_fact_sn_info_f6",
-	// 	SchemaName: "dw",
-	// }
-	udf.Calls = qs.Calls
+	var sqlTree *depgraph.Graph
 
-	sqlTree, err := HandleUDF4Lineage(ds.DB, udf)
+	udf, err := IdentifyFuncCall(qs.Query)
+	if err == nil {
+		sqlTree, err = HandleUDF4Lineage(ds.DB, udf)
+	} else {
+		sqlTree, err = lineage.Parse(qs.Query)
+	}
 	if err != nil {
-		log.Errorf("HandleUDF %+v, err: %s", udf, err)
+		log.Errorf("Parse err: %s", err)
 		return
 	}
+
+	udf.Calls = qs.Calls
 
 	log.Debugf("UDF Graph: %+v", sqlTree)
 	for i, layer := range sqlTree.TopoSortedLayers() {
@@ -265,9 +262,9 @@ func generateTableLineage(qs *QueryStore, ds *DataSource, session neo4j.Session)
 func IdentifyFuncCall(sql string) (*lineage.Op, error) {
 
 	// 正则匹配，忽略大小写
-	// select dw.func_insert_xxxx(a,b)
-	// select * from report.query_xxxx(1,2,3)
-	// call dw.func_insert_xxxx(a,b)
+	// select dw.func_insert_?()
+	// call   dw.func_insert_?()
+	// select * from dw.func_insert_?()
 
 	if r := PG_FuncCallPattern1.FindStringSubmatch(sql); r != nil {
 		log.Debug("FuncCallPattern1:", r[1], r[2], r[3])
@@ -286,7 +283,7 @@ func IdentifyFuncCall(sql string) (*lineage.Op, error) {
 		}, nil
 	}
 
-	return nil, errors.New("not a function call")
+	return &lineage.Op{}, errors.New("not a function call")
 }
 
 // 解析函数调用

@@ -256,12 +256,13 @@ func parseSQL(sqlTree *depgraph.Graph, sql string) error {
 			tnode := parseRangeVar(ds.GetRelation())
 			sqlTree.AddNode(tnode)
 
+			// TODO:是否要支持解析关联删除？
 			// 关联删除，依赖 using 关键词
-			if ds.GetUsingClause() != nil {
-				for _, r := range parseUsingClause(ds.GetUsingClause()) {
-					sqlTree.DependOn(tnode, r)
-				}
-			}
+			// if ds.GetUsingClause() != nil {
+			// 	for _, r := range parseUsingClause(ds.GetUsingClause()) {
+			// 		sqlTree.DependOn(tnode, r)
+			// 	}
+			// }
 
 			// 关联删除，依赖 where 关键词
 			// if ds.GetWhereClause() != nil {
@@ -441,6 +442,7 @@ func parseUsingClause(uc []*pg_query.Node) []*Record {
 	return records
 }
 
+// TODO:
 func parseWhereClause(wc *pg_query.Node) []*Record {
 	var records []*Record
 
