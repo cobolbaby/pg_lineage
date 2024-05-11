@@ -377,8 +377,11 @@ func GetUDFDefinition(db *sql.DB, udf *lineage.Op) (string, error) {
 func completeLineageGraphInfo(ds *DataSource, session neo4j.Session) {
 
 	rows, err := ds.DB.Query(`
-		SELECT relname, schemaname, seq_scan, COALESCE(obj_description(relid), '') as comment
+		SELECT relname, schemaname, seq_scan, seq_tup_read, 
+			COALESCE(idx_scan, 0), COALESCE(idx_tup_fetch, 0), COALESCE(obj_description(relid), '') as comment
 		FROM pg_stat_user_tables
+		WHERE schemaname !~ '^pg_temp_' AND schemaname !~ '_del$'
+			AND schemaname NOT IN ('sync', 'sync_his', 'partman', 'debug')
 	`)
 	if err != nil {
 		log.Fatalf("Unable to execute query: %v\n", err)
@@ -387,18 +390,21 @@ func completeLineageGraphInfo(ds *DataSource, session neo4j.Session) {
 
 	for rows.Next() {
 		var relname, schemaName, comment string
-		var seqScan int
-		err := rows.Scan(&relname, &schemaName, &seqScan, &comment)
+		var seqScan, seqTupRead, idxScan, idxTupFetch int64
+		err := rows.Scan(&relname, &schemaName, &seqScan, &seqTupRead, &idxScan, &idxTupFetch, &comment)
 		if err != nil {
 			log.Fatalf("Error scanning row: %v\n", err)
 		}
 
 		err = lineage.CompleteLineageGraphInfo(session, &lineage.Record{
-			Database:   ds.Alias,
-			SchemaName: schemaName,
-			RelName:    relname,
-			SeqScan:    int32(seqScan),
-			Comment:    comment,
+			Database:    ds.Alias,
+			SchemaName:  schemaName,
+			RelName:     relname,
+			SeqScan:     seqScan,
+			SeqTupRead:  seqTupRead,
+			IdxScan:     idxScan,
+			IdxTupFetch: idxTupFetch,
+			Comment:     comment,
 		})
 		if err != nil {
 			log.Fatalf("Error updating Neo4j: %v\n", err)

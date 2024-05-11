@@ -39,7 +39,7 @@ func main() {
 
 	for rows.Next() {
 		var relname, schemaName string
-		var seqScan int
+		var seqScan int64
 		err := rows.Scan(&relname, &schemaName, &seqScan)
 		if err != nil {
 			log.Fatalf("Error scanning row: %v\n", err)
@@ -49,7 +49,7 @@ func main() {
 			Database:   "postgres",
 			SchemaName: schemaName,
 			RelName:    relname,
-			SeqScan:    int32(seqScan),
+			SeqScan:    seqScan,
 		})
 		if err != nil {
 			log.Fatalf("Error creating/updating Neo4j node: %v\n", err)

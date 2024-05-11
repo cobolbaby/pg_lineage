@@ -34,20 +34,23 @@ type Owner struct {
 }
 
 type Record struct {
-	SchemaName string
-	RelName    string
-	Type       string // 表类型
-	Columns    []string
-	Comment    string
-	Size       int64
-	Layer      string
-	Database   string
-	Owner      *Owner
-	CreateTime time.Time
-	Labels     []string
-	ID         string
-	SeqScan    int32
-	Calls      int64
+	ID             string
+	Database       string
+	SchemaName     string
+	RelName        string
+	RelPersistence string
+	RelKind        string
+	Columns        []string
+	Size           int64
+	Owner          *Owner
+	CreateTime     time.Time
+	Tags           []string
+	Calls          int64
+	SeqScan        int64
+	SeqTupRead     int64
+	IdxScan        int64
+	IdxTupFetch    int64
+	Comment        string
 }
 
 func (r *Record) GetID() string {
@@ -69,9 +72,8 @@ func (r *Record) GetID() string {
 }
 
 func (r *Record) IsTemp() bool {
-	return r.SchemaName == "" ||
-		strings.HasPrefix(r.RelName, "temp_") ||
-		strings.HasPrefix(r.RelName, "tmp_")
+	return strings.HasPrefix(r.SchemaName, "pg_temp_") || r.RelPersistence == REL_PERSIST_NOT ||
+		r.SchemaName == ""
 }
 
 type Op struct {
@@ -167,6 +169,7 @@ func Parse(sql string) (*depgraph.Graph, error) {
 	return sqlTree, nil
 }
 
+// TODO:目前会将一堆系统表和临时表的信息也入 Neo4j，需要优化
 func parseSQL(sqlTree *depgraph.Graph, sql string) error {
 
 	log.Debugf("%s\n", sql)
@@ -313,9 +316,10 @@ func parseRangeVar(node *pg_query.RangeVar) *Record {
 	// }
 
 	return &Record{
-		RelName:    node.GetRelname(),
-		SchemaName: node.GetSchemaname(),
-		Type:       node.GetRelpersistence(), // relpersistence 不同，全局临时表为 s ，普通临时表为 t
+		RelName:        node.GetRelname(),
+		SchemaName:     node.GetSchemaname(),
+		RelPersistence: node.GetRelpersistence(), // p = permanent table/sequence, u = unlogged table/sequence, t = temporary table/sequence
+		// RelKind:        node.GetRelkind(),
 	}
 
 }
@@ -325,9 +329,9 @@ func parseWithClause(wc *pg_query.WithClause, sqlTree *depgraph.Graph) error {
 
 	for _, cte := range wc.GetCtes() {
 		tnode := &Record{
-			RelName:    cte.GetCommonTableExpr().GetCtename(),
-			SchemaName: "",
-			Type:       REL_PERSIST_NOT,
+			RelName:        cte.GetCommonTableExpr().GetCtename(),
+			SchemaName:     "",
+			RelPersistence: REL_PERSIST_NOT,
 		}
 		sqlTree.AddNode(tnode)
 

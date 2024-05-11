@@ -42,7 +42,6 @@ func CreateGraph(session neo4j.Session, graph *depgraph.Graph, extends *Op) erro
 				return nil, err
 			}
 		}
-		// ? 创建 UDF 点?
 		// 创建线
 		for k, v := range graph.GetRelationships() {
 			for kk := range v {
@@ -72,17 +71,18 @@ func CreateNode(tx neo4j.Transaction, r *Record) (*Record, error) {
 	// CREATE CONSTRAINT ON (cc:Lineage) ASSERT cc.id IS UNIQUE
 	records, err := tx.Run(`
 		MERGE (n:Lineage:`+r.SchemaName+` {id: $id}) 
-		ON CREATE SET n.database = $database, n.schemaname = $schemaname, n.relname = $relname, n.udt = timestamp(), n.type = $type, n.calls = $calls
-		ON MATCH SET n.udt = timestamp(), n.type = $type, n.calls = n.calls + $calls
+		ON CREATE SET n.database = $database, n.schemaname = $schemaname, n.relname = $relname, n.udt = timestamp(), 
+					n.relpersistence = $relpersistence, n.calls = $calls
+		ON MATCH SET n.udt = timestamp(), n.relpersistence = $relpersistence, n.calls = n.calls + $calls
 		RETURN n.id
 	`,
 		map[string]interface{}{
-			"id":         r.Database + "." + r.GetID(),
-			"database":   r.Database,
-			"schemaname": r.SchemaName,
-			"relname":    r.RelName,
-			"type":       r.Type,
-			"calls":      r.Calls,
+			"id":             r.Database + "." + r.GetID(),
+			"database":       r.Database,
+			"schemaname":     r.SchemaName,
+			"relname":        r.RelName,
+			"relpersistence": r.RelPersistence,
+			"calls":          r.Calls,
 		})
 	// In face of driver native errors, make sure to return them directly.
 	// Depending on the error, the driver may try to execute the function again.
@@ -121,17 +121,25 @@ func CompleteLineageGraphInfo(session neo4j.Session, r *Record) error {
 	// Create or update Neo4j node with PostgreSQL data
 	cypher := `
 		MERGE (n:Lineage:` + r.SchemaName + ` {id: $id})
-		ON CREATE SET n.database = $database, n.schemaname = $schemaname, n.relname = $relname, n.udt = timestamp(), n.seq_scan = $seq_scan, n.comment = $comment
-		ON MATCH SET n.udt = timestamp(), n.seq_scan = $seq_scan, n.comment = $comment
+		ON CREATE SET n.database = $database, n.schemaname = $schemaname, n.relname = $relname, 
+					n.udt = timestamp(), n.comment = $comment,  
+					n.seq_scan = $seq_scan, n.seq_tup_read = $seq_tup_read, 
+					n.idx_scan = $idx_scan, n.idx_tup_fetch = $idx_tup_fetch
+		ON MATCH SET n.udt = timestamp(), n.comment = $comment, 
+					n.seq_scan = $seq_scan, n.seq_tup_read = $seq_tup_read, 
+					n.idx_scan = $idx_scan, n.idx_tup_fetch = $idx_tup_fetch
 	`
 	_, err := session.WriteTransaction(func(transaction neo4j.Transaction) (interface{}, error) {
 		result, err := transaction.Run(cypher, map[string]interface{}{
-			"id":         r.Database + "." + r.GetID(),
-			"database":   r.Database,
-			"schemaname": r.SchemaName,
-			"relname":    r.RelName,
-			"seq_scan":   r.SeqScan, // Set your value for seq_scan
-			"comment":    r.Comment,
+			"id":            r.Database + "." + r.GetID(),
+			"database":      r.Database,
+			"schemaname":    r.SchemaName,
+			"relname":       r.RelName,
+			"seq_scan":      r.SeqScan, // Set your value for seq_scan
+			"seq_tup_read":  r.SeqTupRead,
+			"idx_scan":      r.IdxScan,
+			"idx_tup_fetch": r.IdxTupFetch,
+			"comment":       r.Comment,
 		})
 		if err != nil {
 			return nil, err
