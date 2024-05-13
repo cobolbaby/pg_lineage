@@ -169,7 +169,6 @@ func Parse(sql string) (*depgraph.Graph, error) {
 	return sqlTree, nil
 }
 
-// TODO:目前会将一堆系统表和临时表的信息也入 Neo4j，需要优化
 func parseSQL(sqlTree *depgraph.Graph, sql string) error {
 
 	log.Debugf("%s\n", sql)
