@@ -179,7 +179,8 @@ func main() {
 		var qs QueryStore
 		_ = querys.Scan(&qs.Query, &qs.Calls, &qs.TotalTime, &qs.MinTime, &qs.MaxTime, &qs.MeanTime)
 
-		// 生成血缘图，因为图里面边的信息附带了udf属性，所以不能一次性往图数据库里面写入
+		// 生成血缘图
+		// 一个 udf 会生成一颗 sqlTree，且不能将多个 udf 的 sqlTree 做合并，所以需要循环写入所有的 sqlTree
 		generateTableLineage(&qs, ds, session)
 
 		// 为了避免重复插入，写入前依赖 MAP 特性做一次去重，并且最后一次性入库
@@ -231,6 +232,7 @@ func generateTableJoinRelation(qs *QueryStore, ds *DataSource, session neo4j.Ses
 // 生成表血缘关系图
 func generateTableLineage(qs *QueryStore, ds *DataSource, session neo4j.Session) {
 
+	// 一个 udf 会生成一颗 Tree
 	var sqlTree *depgraph.Graph
 
 	udf, err := IdentifyFuncCall(qs.Query)
