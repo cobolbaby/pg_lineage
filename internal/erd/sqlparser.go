@@ -2,10 +2,12 @@ package erd
 
 import (
 	"crypto/md5"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"maps"
 
+	"pg_lineage/internal/lineage"
 	"pg_lineage/pkg/log"
 
 	pg_query "github.com/pganalyze/pg_query_go/v5"
@@ -72,6 +74,32 @@ func (r *RelationShip) ToString() string {
 		r.Type,
 		tDisplayName, r.TColumn.Field,
 	)
+}
+
+func HandleUDF4ERD(db *sql.DB, udf *lineage.Op) (map[string]*RelationShip, error) {
+	log.Infof("HandleUDF: %s.%s", udf.SchemaName, udf.ProcName)
+
+	// 排除系统函数的干扰 e.g. select now()
+	if udf.SchemaName == "" || udf.SchemaName == "pg_catalog" {
+		return nil, fmt.Errorf("UDF %s is system function", udf.ProcName)
+	}
+
+	definition, err := lineage.GetUDFDefinition(db, udf)
+	if err != nil {
+		log.Errorf("GetUDFDefinition err: %s", err)
+		return nil, err
+	}
+
+	plpgsql := lineage.FilterUnhandledCommands(definition)
+	// log.Debug("plpgsql: ", plpgsql)
+
+	relationShips, err := ParseUDF(plpgsql)
+	if err != nil {
+		log.Errorf("ParseUDF %+v, err: %s", udf, err)
+		return nil, err
+	}
+
+	return relationShips, nil
 }
 
 func ParseUDF(plpgsql string) (map[string]*RelationShip, error) {

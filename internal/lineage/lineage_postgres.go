@@ -68,9 +68,9 @@ func CreateGraph(session neo4j.Session, graph *depgraph.Graph, extends *Op) erro
 // 创建图中节点
 func CreateNode(tx neo4j.Transaction, r *Record) (*Record, error) {
 	// 需要将 ID 作为唯一主键
-	// CREATE CONSTRAINT ON (cc:Lineage) ASSERT cc.id IS UNIQUE
+	// CREATE CONSTRAINT ON (cc:Lineage:PG) ASSERT cc.id IS UNIQUE
 	records, err := tx.Run(`
-		MERGE (n:Lineage:`+r.SchemaName+` {id: $id}) 
+		MERGE (n:Lineage:PG:`+r.SchemaName+` {id: $id}) 
 		ON CREATE SET n.database = $database, n.schemaname = $schemaname, n.relname = $relname, n.udt = timestamp(), 
 					n.relpersistence = $relpersistence, n.calls = $calls
 		ON MATCH SET n.udt = timestamp(), n.relpersistence = $relpersistence, n.calls = n.calls + $calls
@@ -120,7 +120,7 @@ func CreateEdge(tx neo4j.Transaction, r *Op) (*Op, error) {
 func CompleteLineageGraphInfo(session neo4j.Session, r *Record) error {
 	// Create or update Neo4j node with PostgreSQL data
 	cypher := `
-		MERGE (n:Lineage:` + r.SchemaName + ` {id: $id})
+		MERGE (n:Lineage:PG:` + r.SchemaName + ` {id: $id})
 		ON CREATE SET n.database = $database, n.schemaname = $schemaname, n.relname = $relname, 
 					n.udt = timestamp(), n.comment = $comment,  
 					n.seq_scan = $seq_scan, n.seq_tup_read = $seq_tup_read, 

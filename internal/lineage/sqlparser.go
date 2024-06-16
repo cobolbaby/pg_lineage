@@ -1,6 +1,8 @@
 package lineage
 
 import (
+	"database/sql"
+	"fmt"
 	"strings"
 	"time"
 
@@ -77,16 +79,16 @@ func (r *Record) IsTemp() bool {
 }
 
 type Op struct {
-	Type       string
-	ProcName   string
-	SchemaName string
+	ID         string
 	Database   string
-	Comment    string
-	Owner      *Owner
+	SchemaName string
+	ProcName   string
+	Type       string
 	SrcID      string
 	DestID     string
-	ID         string
+	Owner      *Owner
 	Calls      int64
+	Comment    string
 }
 
 func (o *Op) GetID() string {
@@ -98,6 +100,33 @@ func (o *Op) GetID() string {
 		o.SchemaName = "public"
 	}
 	return o.SchemaName + "." + o.ProcName
+}
+
+// 解析函数调用
+func HandleUDF4Lineage(db *sql.DB, udf *Op) (*depgraph.Graph, error) {
+	log.Infof("HandleUDF: %s.%s", udf.SchemaName, udf.ProcName)
+
+	// 排除系统函数的干扰 e.g. select now()
+	if udf.SchemaName == "" || udf.SchemaName == "pg_catalog" {
+		return nil, fmt.Errorf("UDF %s is system function", udf.ProcName)
+	}
+
+	definition, err := GetUDFDefinition(db, udf)
+	if err != nil {
+		log.Errorf("GetUDFDefinition err: %s", err)
+		return nil, err
+	}
+
+	plpgsql := FilterUnhandledCommands(definition)
+	// log.Debug("plpgsql: ", plpgsql)
+
+	sqlTree, err := ParseUDF(plpgsql)
+	if err != nil {
+		log.Errorf("ParseUDF %+v, err: %s", udf, err)
+		return nil, err
+	}
+
+	return sqlTree, nil
 }
 
 func ParseUDF(plpgsql string) (*depgraph.Graph, error) {

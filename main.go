@@ -2,12 +2,10 @@ package main
 
 import (
 	"database/sql"
-	"errors"
 	"flag"
 	"fmt"
 	"net/url"
 	"os"
-	"regexp"
 	"strings"
 
 	"pg_lineage/internal/erd"
@@ -18,32 +16,6 @@ import (
 	_ "github.com/lib/pq"
 	"github.com/neo4j/neo4j-go-driver/v4/neo4j"
 	"github.com/spf13/viper"
-)
-
-var (
-	PLPGSQL_UNHANLED_COMMANDS   = regexp.MustCompile(`(?i)set\s+(time zone|enable_)(.*?);`)
-	PLPGSQL_GET_FUNC_DEFINITION = `
-		SELECT nspname, proname, pg_get_functiondef(p.oid) as definition
-		FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-		WHERE nspname = '%s' and proname = '%s'
-		LIMIT 1;
-	`
-	PG_QUERY_STORE = `
-		SELECT 
-			s.query, s.calls, s.total_time, s.min_time, s.max_time, s.mean_time
-		FROM 
-			pg_stat_statements s
-		JOIN
-			pg_database d ON d.oid = s.dbid
-		WHERE
-			d.datname = '%s'
-			AND calls > 10
-		ORDER BY
-			s.mean_time DESC
-		Limit 1000;
-	`
-	PG_FuncCallPattern1 = regexp.MustCompile(`(?i)(select|call)\s+(\w+)\.(\w+)\((.*)\)\s*(;)?`)
-	PG_FuncCallPattern2 = regexp.MustCompile(`(?i)select\s+(.*)from\s+(\w+)\.(\w+)\((.*)\)\s*(as\s+(.*))?\s*(;)?`)
 )
 
 type DataSource struct {
@@ -75,6 +47,21 @@ type Config struct {
 }
 
 var config Config
+
+var PG_QUERY_STORE = `
+	SELECT 
+		s.query, s.calls, s.total_time, s.min_time, s.max_time, s.mean_time
+	FROM 
+		pg_stat_statements s
+	JOIN
+		pg_database d ON d.oid = s.dbid
+	WHERE
+		d.datname = '%s'
+		AND calls > 10
+	ORDER BY
+		s.mean_time DESC
+	Limit 1000;
+`
 
 func initConfig(cfgFile string) error {
 	if cfgFile != "" {
@@ -207,8 +194,8 @@ func generateTableJoinRelation(qs *QueryStore, ds *DataSource, session neo4j.Ses
 
 	var m map[string]*erd.RelationShip
 
-	if udf, err := IdentifyFuncCall(qs.Query); err == nil {
-		m, _ = HandleUDF4ERD(ds.DB, udf)
+	if udf, err := lineage.IdentifyFuncCall(qs.Query); err == nil {
+		m, _ = erd.HandleUDF4ERD(ds.DB, udf)
 	} else {
 		m, _ = erd.Parse(qs.Query)
 	}
@@ -235,9 +222,9 @@ func generateTableLineage(qs *QueryStore, ds *DataSource, session neo4j.Session)
 	// 一个 udf 会生成一颗 Tree
 	var sqlTree *depgraph.Graph
 
-	udf, err := IdentifyFuncCall(qs.Query)
+	udf, err := lineage.IdentifyFuncCall(qs.Query)
 	if err == nil {
-		sqlTree, err = HandleUDF4Lineage(ds.DB, udf)
+		sqlTree, err = lineage.HandleUDF4Lineage(ds.DB, udf)
 	} else {
 		sqlTree, err = lineage.Parse(qs.Query)
 	}
@@ -259,121 +246,6 @@ func generateTableLineage(qs *QueryStore, ds *DataSource, session neo4j.Session)
 	if err := lineage.CreateGraph(session, sqlTree.ShrinkGraph(), udf); err != nil {
 		log.Errorf("UDF CreateGraph err: %s ", err)
 	}
-}
-
-func IdentifyFuncCall(sql string) (*lineage.Op, error) {
-
-	// 正则匹配，忽略大小写
-	// select dw.func_insert_?()
-	// call   dw.func_insert_?()
-	// select * from dw.func_insert_?()
-
-	if r := PG_FuncCallPattern1.FindStringSubmatch(sql); r != nil {
-		log.Debug("FuncCallPattern1:", r[1], r[2], r[3])
-		return &lineage.Op{
-			Type:       "plpgsql",
-			SchemaName: r[2],
-			ProcName:   r[3],
-		}, nil
-	}
-	if r := PG_FuncCallPattern2.FindStringSubmatch(sql); r != nil {
-		log.Debug("FuncCallPattern2:", r[1], r[2], r[3])
-		return &lineage.Op{
-			Type:       "plpgsql",
-			SchemaName: r[2],
-			ProcName:   r[3],
-		}, nil
-	}
-
-	return &lineage.Op{}, errors.New("not a function call")
-}
-
-// 解析函数调用
-func HandleUDF4Lineage(db *sql.DB, udf *lineage.Op) (*depgraph.Graph, error) {
-	log.Infof("HandleUDF: %s.%s", udf.SchemaName, udf.ProcName)
-
-	// 排除系统函数的干扰 e.g. select now()
-	if udf.SchemaName == "" || udf.SchemaName == "pg_catalog" {
-		return nil, fmt.Errorf("UDF %s is system function", udf.ProcName)
-	}
-
-	definition, err := GetUDFDefinition(db, udf)
-	if err != nil {
-		log.Errorf("GetUDFDefinition err: %s", err)
-		return nil, err
-	}
-
-	plpgsql := filterUnhandledCommands(definition)
-	// log.Debug("plpgsql: ", plpgsql)
-
-	sqlTree, err := lineage.ParseUDF(plpgsql)
-	if err != nil {
-		log.Errorf("ParseUDF %+v, err: %s", udf, err)
-		return nil, err
-	}
-
-	return sqlTree, nil
-}
-
-func HandleUDF4ERD(db *sql.DB, udf *lineage.Op) (map[string]*erd.RelationShip, error) {
-	log.Infof("HandleUDF: %s.%s", udf.SchemaName, udf.ProcName)
-
-	// 排除系统函数的干扰 e.g. select now()
-	if udf.SchemaName == "" || udf.SchemaName == "pg_catalog" {
-		return nil, fmt.Errorf("UDF %s is system function", udf.ProcName)
-	}
-
-	definition, err := GetUDFDefinition(db, udf)
-	if err != nil {
-		log.Errorf("GetUDFDefinition err: %s", err)
-		return nil, err
-	}
-
-	plpgsql := filterUnhandledCommands(definition)
-	// log.Debug("plpgsql: ", plpgsql)
-
-	relationShips, err := erd.ParseUDF(plpgsql)
-	if err != nil {
-		log.Errorf("ParseUDF %+v, err: %s", udf, err)
-		return nil, err
-	}
-
-	return relationShips, nil
-}
-
-// 过滤部分关键词
-func filterUnhandledCommands(content string) string {
-	// 字符串过滤，https://github.com/pganalyze/libpg_query/issues/125
-	// return PLPGSQL_UNHANLED_COMMANDS.ReplaceAllString(content, "")
-	return content
-}
-
-// 获取相关定义
-func GetUDFDefinition(db *sql.DB, udf *lineage.Op) (string, error) {
-
-	rows, err := db.Query(fmt.Sprintf(PLPGSQL_GET_FUNC_DEFINITION, udf.SchemaName, udf.ProcName))
-	if err != nil {
-		return "", err
-	}
-	defer rows.Close()
-
-	var nspname string
-	var proname string
-	var definition string
-
-	for rows.Next() {
-		err := rows.Scan(&nspname, &proname, &definition)
-		switch err {
-		case sql.ErrNoRows:
-			log.Warn("No rows were returned")
-		case nil:
-			log.Infof("Query Data = (%s, %s)\n", nspname, proname)
-		default:
-			log.Fatalf("rows.Scan err: %s", err)
-		}
-	}
-
-	return definition, nil
 }
 
 func completeLineageGraphInfo(ds *DataSource, session neo4j.Session) {

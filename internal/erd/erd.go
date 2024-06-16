@@ -44,9 +44,9 @@ func CreateGraph(session neo4j.Session, relationShips map[string]*RelationShip) 
 }
 
 func CreateNode(tx neo4j.Transaction, r *Column) error {
-	// CREATE CONSTRAINT ON (cc:ERD) ASSERT cc.id IS UNIQUE
+	// CREATE CONSTRAINT ON (cc:ERD:PG) ASSERT cc.id IS UNIQUE
 	records, err := tx.Run(`
-		MERGE (n:ERD:`+r.Schema+` {id: $id}) 
+		MERGE (n:ERD:PG:`+r.Schema+` {id: $id}) 
 		ON CREATE SET n.schemaname = $schemaname, n.relname = $relname, n.udt = timestamp()
 		ON MATCH SET n.udt = timestamp()
 		RETURN n.id
@@ -73,13 +73,13 @@ func CreateEdge(tx neo4j.Transaction, id string, r *RelationShip) error {
 	if r.Type == "JOIN_INNER" {
 		// Neo4jError: Neo.ClientError.Statement.SyntaxError (Only directed relationships are supported)
 		cypher = `
-			MATCH (snode:ERD {id: $sid}), (tnode:ERD {id: $tid})
+			MATCH (snode:ERD:PG {id: $sid}), (tnode:ERD:PG {id: $tid})
 			CREATE (snode)-[e:` + r.Type + ` {id: $id, larg: $larg, rarg: $rarg, type: $type}]->(tnode)
 			RETURN e
 		`
 	} else if r.Type == "JOIN_LEFT" {
 		cypher = `
-			MATCH (snode:ERD {id: $sid}), (tnode:ERD {id: $tid})
+			MATCH (snode:ERD:PG {id: $sid}), (tnode:ERD:PG {id: $tid})
 			CREATE (snode)-[e:` + r.Type + ` {id: $id, larg: $larg, rarg: $rarg, type: $type}]->(tnode)
 			RETURN e
 		`
