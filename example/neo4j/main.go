@@ -45,7 +45,7 @@ func main() {
 			log.Fatalf("Error scanning row: %v\n", err)
 		}
 
-		err = lineage.CompleteLineageGraphInfo(session, &lineage.Record{
+		err = lineage.CompleteLineageGraphInfo(session, &lineage.Table{
 			Database:   "postgres",
 			SchemaName: schemaName,
 			RelName:    relname,

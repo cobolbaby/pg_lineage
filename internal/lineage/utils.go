@@ -21,7 +21,7 @@ var (
 	PG_FuncCallPattern2 = regexp.MustCompile(`(?i)select\s+(.*)from\s+(\w+)\.(\w+)\((.*)\)\s*(as\s+(.*))?\s*(;)?`)
 )
 
-func IdentifyFuncCall(sql string) (*Op, error) {
+func IdentifyFuncCall(sql string) (*Udf, error) {
 
 	// 正则匹配，忽略大小写
 	// select dw.func_insert_?()
@@ -30,7 +30,7 @@ func IdentifyFuncCall(sql string) (*Op, error) {
 
 	if r := PG_FuncCallPattern1.FindStringSubmatch(sql); r != nil {
 		// log.Debug("FuncCallPattern1:", r[1], r[2], r[3])
-		return &Op{
+		return &Udf{
 			Type:       "plpgsql",
 			SchemaName: r[2],
 			ProcName:   r[3],
@@ -38,14 +38,14 @@ func IdentifyFuncCall(sql string) (*Op, error) {
 	}
 	if r := PG_FuncCallPattern2.FindStringSubmatch(sql); r != nil {
 		// log.Debug("FuncCallPattern2:", r[1], r[2], r[3])
-		return &Op{
+		return &Udf{
 			Type:       "plpgsql",
 			SchemaName: r[2],
 			ProcName:   r[3],
 		}, nil
 	}
 
-	return &Op{}, errors.New("not a function call")
+	return &Udf{}, errors.New("not a function call")
 }
 
 // 过滤部分关键词
@@ -56,7 +56,7 @@ func FilterUnhandledCommands(content string) string {
 }
 
 // 获取相关定义
-func GetUDFDefinition(db *sql.DB, udf *Op) (string, error) {
+func GetUDFDefinition(db *sql.DB, udf *Udf) (string, error) {
 
 	rows, err := db.Query(fmt.Sprintf(PLPGSQL_GET_FUNC_DEFINITION, udf.SchemaName, udf.ProcName))
 	if err != nil {

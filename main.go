@@ -270,7 +270,7 @@ func completeLineageGraphInfo(ds *DataSource, session neo4j.Session) {
 			log.Fatalf("Error scanning row: %v\n", err)
 		}
 
-		err = lineage.CompleteLineageGraphInfo(session, &lineage.Record{
+		err = lineage.CompleteLineageGraphInfo(session, &lineage.Table{
 			Database:    ds.Alias,
 			SchemaName:  schemaName,
 			RelName:     relname,

@@ -76,7 +76,7 @@ func (r *RelationShip) ToString() string {
 	)
 }
 
-func HandleUDF4ERD(db *sql.DB, udf *lineage.Op) (map[string]*RelationShip, error) {
+func HandleUDF4ERD(db *sql.DB, udf *lineage.Udf) (map[string]*RelationShip, error) {
 	log.Infof("HandleUDF: %s.%s", udf.SchemaName, udf.ProcName)
 
 	// 排除系统函数的干扰 e.g. select now()

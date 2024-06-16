@@ -11,43 +11,43 @@ import (
 func main() {
 	g := depgraph.New()
 
-	r1 := &lineage.Record{
+	r1 := &lineage.Table{
 		SchemaName:     "public",
 		RelName:        "test_table",
 		RelPersistence: "p",
 		ID:             "public.test_table",
 	}
-	r2 := &lineage.Record{
+	r2 := &lineage.Table{
 		SchemaName:     "public",
 		RelName:        "test_table2",
 		RelPersistence: "p",
 		ID:             "public.test_table2",
 	}
-	r3 := &lineage.Record{
+	r3 := &lineage.Table{
 		SchemaName:     "",
 		RelName:        "temp_test_table3",
 		RelPersistence: "t",
 		ID:             "temp_test_table3",
 	}
-	r4 := &lineage.Record{
+	r4 := &lineage.Table{
 		SchemaName:     "",
 		RelName:        "temp_test_table4",
 		RelPersistence: "t",
 		ID:             "temp_test_table4",
 	}
-	r5 := &lineage.Record{
+	r5 := &lineage.Table{
 		SchemaName:     "dw",
 		RelName:        "test_table5",
 		RelPersistence: "t",
 		ID:             "dw.test_table5",
 	}
-	r6 := &lineage.Record{
+	r6 := &lineage.Table{
 		SchemaName:     "dw",
 		RelName:        "test_table6",
 		RelPersistence: "p",
 		ID:             "dw.test_table6",
 	}
-	r7 := &lineage.Record{
+	r7 := &lineage.Table{
 		SchemaName:     "dw",
 		RelName:        "test_table7",
 		RelPersistence: "p",

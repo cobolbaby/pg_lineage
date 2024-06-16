@@ -18,7 +18,7 @@ func ResetGraph(session neo4j.Session) error {
 	return err
 }
 
-func CreateGraph(session neo4j.Session, graph *depgraph.Graph, extends *Op) error {
+func CreateGraph(session neo4j.Session, graph *depgraph.Graph, extends *Udf) error {
 
 	log.Infof("ShrinkGraph: %+v", graph)
 	for i, layer := range graph.TopoSortedLayers() {
@@ -28,7 +28,7 @@ func CreateGraph(session neo4j.Session, graph *depgraph.Graph, extends *Op) erro
 	_, err := session.WriteTransaction(func(tx neo4j.Transaction) (interface{}, error) {
 		// 创建点
 		for _, v := range graph.GetNodes() {
-			r, _ := v.(*Record)
+			r, _ := v.(*Table)
 			r.Database = graph.GetNamespace()
 			r.Calls = extends.Calls
 
@@ -66,7 +66,7 @@ func CreateGraph(session neo4j.Session, graph *depgraph.Graph, extends *Op) erro
 // 3. 对现有服务的改造，就时重写下面两个方法
 
 // 创建图中节点
-func CreateNode(tx neo4j.Transaction, r *Record) (*Record, error) {
+func CreateNode(tx neo4j.Transaction, r *Table) (*Table, error) {
 	// 需要将 ID 作为唯一主键
 	// CREATE CONSTRAINT ON (cc:Lineage:PG) ASSERT cc.id IS UNIQUE
 	records, err := tx.Run(`
@@ -99,7 +99,7 @@ func CreateNode(tx neo4j.Transaction, r *Record) (*Record, error) {
 }
 
 // 创建图中边
-func CreateEdge(tx neo4j.Transaction, r *Op) (*Op, error) {
+func CreateEdge(tx neo4j.Transaction, r *Udf) (*Udf, error) {
 	_, err := tx.Run(`
 		MATCH (pnode {id: $pid}), (cnode {id: $cid})
 		CREATE (pnode)-[e:DownStream {id: $id, database: $database, schemaname: $schemaname, procname: $procname, calls: $calls, udt: timestamp()}]->(cnode)
@@ -117,7 +117,7 @@ func CreateEdge(tx neo4j.Transaction, r *Op) (*Op, error) {
 	return nil, err
 }
 
-func CompleteLineageGraphInfo(session neo4j.Session, r *Record) error {
+func CompleteLineageGraphInfo(session neo4j.Session, r *Table) error {
 	// Create or update Neo4j node with PostgreSQL data
 	cypher := `
 		MERGE (n:Lineage:PG:` + r.SchemaName + ` {id: $id})
