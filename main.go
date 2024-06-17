@@ -10,12 +10,12 @@ import (
 
 	"pg_lineage/internal/erd"
 	"pg_lineage/internal/lineage"
+	C "pg_lineage/pkg/config"
 	"pg_lineage/pkg/depgraph"
 	"pg_lineage/pkg/log"
 
 	_ "github.com/lib/pq"
 	"github.com/neo4j/neo4j-go-driver/v4/neo4j"
-	"github.com/spf13/viper"
 )
 
 type DataSource struct {
@@ -33,21 +33,6 @@ type QueryStore struct {
 	MeanTime  float64
 }
 
-type Config struct {
-	Postgres struct {
-		DSN   string `mapstructure:"dsn"`
-		Alias string `mapstructure:"alias"`
-	} `mapstructure:"postgres"`
-	Neo4j struct {
-		URL      string `mapstructure:"url"`
-		User     string `mapstructure:"user"`
-		Password string `mapstructure:"password"`
-	} `mapstructure:"neo4j"`
-	Log log.LoggerConfig
-}
-
-var config Config
-
 var PG_QUERY_STORE = `
 	SELECT 
 		s.query, s.calls, s.total_time, s.min_time, s.max_time, s.mean_time
@@ -63,45 +48,14 @@ var PG_QUERY_STORE = `
 	Limit 1000;
 `
 
-func initConfig(cfgFile string) error {
-	if cfgFile != "" {
-		// Use config file from the flag.
-		viper.SetConfigFile(cfgFile)
-	} else {
-		viper.SetConfigName("config") // name of config file (without extension)
-		viper.SetConfigType("yaml")   // 设置配置文件类型
-		// viper.AddConfigPath("$HOME/.dkron") // call multiple times to add many search paths
-		viper.AddConfigPath("./config") // call multiple times to add many search paths
-	}
-
-	// 如果有相应的环境变量设置，则使用环境变量的值覆盖配置文件中的值
-	viper.SetEnvPrefix("LINEAGE")
-	replacer := strings.NewReplacer("-", "_")
-	viper.SetEnvKeyReplacer(replacer)
-	viper.AutomaticEnv() // read in environment variables that match
-
-	// 读取配置文件
-	err := viper.ReadInConfig()
-	if err != nil {
-		fmt.Println("Error reading config file:", err)
-		return err
-	}
-
-	// 将配置文件内容解析到结构体中
-	err = viper.Unmarshal(&config)
-	if err != nil {
-		fmt.Println("Error parsing config file:", err)
-		return err
-	}
-
-	return nil
-}
+var config C.Config
 
 func init() {
 	configFile := flag.String("c", "./config/config.yaml", "path to config.yaml")
 	flag.Parse()
 
-	if err := initConfig(*configFile); err != nil {
+	config, err := C.InitConfig(*configFile)
+	if err != nil {
 		fmt.Println("initConfig err: ", err)
 		os.Exit(1)
 	}
@@ -115,15 +69,15 @@ func init() {
 func main() {
 	log.Infof("log level: %s, log file: %s", config.Log.Level, config.Log.Path)
 
-	db, err := sql.Open("postgres", config.Postgres.DSN)
+	db, err := sql.Open("postgres", config.PostgreSQL.DSN)
 	if err != nil {
 		log.Fatal("sql.Open err: ", err)
 	}
 	defer db.Close()
 
-	uri, _ := url.Parse(config.Postgres.DSN)
+	uri, _ := url.Parse(config.PostgreSQL.DSN)
 	ds := &DataSource{
-		Alias: config.Postgres.Alias,
+		Alias: config.PostgreSQL.Alias,
 		Name:  strings.TrimPrefix(uri.Path, "/"),
 		DB:    db,
 	}
