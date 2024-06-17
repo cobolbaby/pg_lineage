@@ -54,13 +54,12 @@ func init() {
 	configFile := flag.String("c", "./config/config.yaml", "path to config.yaml")
 	flag.Parse()
 
-	config, err := C.InitConfig(*configFile)
-	if err != nil {
-		fmt.Println("initConfig err: ", err)
+	var err error
+	if config, err = C.InitConfig(*configFile); err != nil {
+		fmt.Println("InitConfig err: ", err)
 		os.Exit(1)
 	}
-
-	if err := log.InitLogger(&config.Log); err != nil {
+	if err = log.InitLogger(&config.Log); err != nil {
 		fmt.Println(err)
 		os.Exit(1)
 	}
@@ -69,15 +68,15 @@ func init() {
 func main() {
 	log.Infof("log level: %s, log file: %s", config.Log.Level, config.Log.Path)
 
-	db, err := sql.Open("postgres", config.PostgreSQL.DSN)
+	db, err := sql.Open("postgres", config.Postgres.DSN)
 	if err != nil {
 		log.Fatal("sql.Open err: ", err)
 	}
 	defer db.Close()
 
-	uri, _ := url.Parse(config.PostgreSQL.DSN)
+	uri, _ := url.Parse(config.Postgres.DSN)
 	ds := &DataSource{
-		Alias: config.PostgreSQL.Alias,
+		Alias: config.Postgres.Alias,
 		Name:  strings.TrimPrefix(uri.Path, "/"),
 		DB:    db,
 	}

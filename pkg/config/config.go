@@ -9,10 +9,10 @@ import (
 )
 
 type Config struct {
-	PostgreSQL struct {
+	Postgres struct {
 		DSN   string `mapstructure:"dsn"`
 		Alias string `mapstructure:"alias"`
-	} `mapstructure:"postgresql"`
+	} `mapstructure:"postgres"`
 	Neo4j struct {
 		URL      string `mapstructure:"url"`
 		User     string `mapstructure:"user"`
