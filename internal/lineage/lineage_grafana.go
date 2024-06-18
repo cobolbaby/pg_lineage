@@ -104,6 +104,7 @@ func CreatePanelNode(tx neo4j.Transaction, p *Panel, d *DashboardFullWithMeta) e
 		MERGE (n:Lineage:Grafana:`+d.Meta.FolderTitle+` {id: $id}) 
 		ON CREATE SET n.dashboard_title = $dashboard_title, n.dashboard_uid = $dashboard_uid,
 					  n.panel_type = $panel_type, n.panel_title = $panel_title, n.panel_description = $panel_description,
+					  n.created = $created, n.created_by = $created_by, n.updated = $updated, n.updated_by = $updated_by,
 					  n.rawsql = $rawsql, n.udt = timestamp()
 		ON MATCH SET n.udt = timestamp()
 		RETURN n.id
@@ -116,6 +117,10 @@ func CreatePanelNode(tx neo4j.Transaction, p *Panel, d *DashboardFullWithMeta) e
 			"panel_title":       p.Title,
 			"panel_description": p.Description,
 			"rawsql":            "",
+			"created":           d.Meta.Created,
+			"created_by":        d.Meta.CreatedBy,
+			"updated":           d.Meta.Updated,
+			"updated_by":        d.Meta.UpdatedBy,
 		})
 
 	return err
