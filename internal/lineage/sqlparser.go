@@ -116,6 +116,9 @@ func HandleUDF4Lineage(db *sql.DB, udf *Udf) (*depgraph.Graph, error) {
 		log.Errorf("GetUDFDefinition err: %s", err)
 		return nil, err
 	}
+	if definition == "" {
+		return nil, fmt.Errorf("UDF %s is undefined.", udf.ProcName)
+	}
 
 	plpgsql := FilterUnhandledCommands(definition)
 	// log.Debug("plpgsql: ", plpgsql)
