@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"net/url"
 	"os"
+	"strings"
+
 	"pg_lineage/internal/lineage"
 	C "pg_lineage/pkg/config"
 	"pg_lineage/pkg/depgraph"
@@ -14,6 +17,7 @@ import (
 	"github.com/go-openapi/strfmt"
 	grafanaclient "github.com/grafana/grafana-openapi-client-go/client"
 	grafanasearch "github.com/grafana/grafana-openapi-client-go/client/search"
+	"github.com/grafana/grafana-openapi-client-go/models"
 	_ "github.com/lib/pq"
 	"github.com/neo4j/neo4j-go-driver/v4/neo4j"
 )
@@ -36,157 +40,157 @@ func init() {
 }
 
 func main() {
-	grafanaCfg := &grafanaclient.TransportConfig{
-		// Host is the doman name or IP address of the host that serves the API.
-		Host: config.Grafana.Host,
-		// BasePath is the URL prefix for all API paths, relative to the host root.
-		BasePath: "/api",
-		// Schemes are the transfer protocols used by the API (http or https).
-		Schemes: []string{"https"},
-		// APIKey is an optional API key or service account token.
-		// APIKey: os.Getenv("API_ACCESS_TOKEN"),
-		// BasicAuth is optional basic auth credentials.
-		// BasicAuth: url.UserPassword("admin", "admin"),
-		// OrgID provides an optional organization ID.
-		// OrgID is only supported with BasicAuth since API keys are already org-scoped.
-		// OrgID: 1,
-		// TLSConfig provides an optional configuration for a TLS client
-		// TLSConfig: &tls.Config{},
-		// NumRetries contains the optional number of attempted retries
-		NumRetries: 3,
-		// RetryTimeout sets an optional time to wait before retrying a request
-		// RetryTimeout: 0,
-		// RetryStatusCodes contains the optional list of status codes to retry
-		// Use "x" as a wildcard for a single digit (default: [429, 5xx])
-		RetryStatusCodes: []string{"420", "5xx"},
-		// HTTPHeaders contains an optional map of HTTP headers to add to each request
-		HTTPHeaders: map[string]string{},
-		// Debug:       true,
+	client, err := initGrafanaClient()
+	if err != nil {
+		log.Fatal(err)
 	}
 
-	client := grafanaclient.NewHTTPClientWithConfig(strfmt.Default, grafanaCfg)
-
-	neo4jDriver, err := neo4j.NewDriver(config.Neo4j.URL, neo4j.BasicAuth(config.Neo4j.User, config.Neo4j.Password, ""))
+	neo4jDriver, err := initNeo4jDriver()
 	if err != nil {
-		log.Fatal("connectToNeo4j err: ", err)
+		log.Fatal(err)
 	}
 	defer neo4jDriver.Close()
 
-	// Sessions are short-lived, cheap to create and NOT thread safe. Typically create one or more sessions
-	// per request in your web application. Make sure to call Close on the session when done.
-	// For multi-database support, set sessionConfig.DatabaseName to requested database
-	// Session config will default to write mode, if only reads are to be used configure session for
-	// read mode.
-	session := neo4jDriver.NewSession(neo4j.SessionConfig{})
-	defer session.Close()
+	db, err := sql.Open("postgres", config.Postgres.DSN)
+	if err != nil {
+		log.Fatal("sql.Open err: ", err)
+	}
+	defer db.Close()
 
+	err = processDashboards(client, neo4jDriver, db)
+	if err != nil {
+		log.Fatal(err)
+	}
+}
+
+func initGrafanaClient() (*grafanaclient.GrafanaHTTPAPI, error) {
+	grafanaCfg := &grafanaclient.TransportConfig{
+		Host:             config.Grafana.Host,
+		BasePath:         "/api",
+		Schemes:          []string{"https"},
+		BasicAuth:        url.UserPassword(config.Grafana.User, config.Grafana.Password),
+		OrgID:            config.Grafana.OrgID,
+		NumRetries:       3,
+		RetryStatusCodes: []string{"420", "5xx"},
+		HTTPHeaders:      map[string]string{},
+		// Debug:            true,
+	}
+
+	return grafanaclient.NewHTTPClientWithConfig(strfmt.Default, grafanaCfg), nil
+}
+
+func initNeo4jDriver() (neo4j.Driver, error) {
+	return neo4j.NewDriver(config.Neo4j.URL, neo4j.BasicAuth(config.Neo4j.User, config.Neo4j.Password, ""))
+}
+
+func processDashboards(client *grafanaclient.GrafanaHTTPAPI, neo4jDriver neo4j.Driver, db *sql.DB) error {
 	typeVar := "dash-db"
 	pageVar := int64(1)
 	limitVar := int64(100)
 
 	for {
-		// 执行搜索查询
-		params := grafanasearch.NewSearchParams().
-			WithType(&typeVar).WithPage(&pageVar).WithLimit(&limitVar)
+		params := grafanasearch.NewSearchParams().WithType(&typeVar).WithPage(&pageVar).WithLimit(&limitVar)
 		dashboards, err := client.Search.Search(params)
 		if err != nil {
-			log.Fatalf("Error searching dashboards: %v", err)
+			return fmt.Errorf("error searching dashboards: %v", err)
 		}
 
-		// 处理查询结果
 		if len(dashboards.Payload) == 0 {
-			// 如果没有更多结果，退出循环
 			break
 		}
 
-		// 打印当前页的结果
 		for _, dashboardItem := range dashboards.Payload {
-			// 获取完整的仪表板配置
-			dashboardFullWithMeta, err := client.Dashboards.GetDashboardByUID(dashboardItem.UID)
+			err := processDashboardItem(client, neo4jDriver, db, dashboardItem)
 			if err != nil {
-				log.Fatalf("Error getting dashboard by UID: %v", err)
-			}
-
-			var dashboard lineage.Dashboard
-			dashboardJSON, err := json.Marshal(dashboardFullWithMeta.Payload.Dashboard)
-			if err != nil {
-				log.Fatalf("Error marshalling dashboard JSON: %v", err)
-			}
-			log.Debug(string(dashboardJSON))
-
-			// 将 JSON 数据反序列化为 Dashboard 结构体
-			err = json.Unmarshal(dashboardJSON, &dashboard)
-			if err != nil {
-				log.Fatalf("Error unmarshalling dashboard JSON: %v", err)
-			}
-
-			// 读取特定数据，例如仪表板标题和面板信息
-			log.Debugf("Dashboard Title: %s\n", dashboard.Title)
-			for _, panel := range dashboard.Panels {
-				if panel.Datasource == nil {
-					continue
-				}
-
-				var db *sql.DB
-
-				// TODO:获取数据源详情，新建数据库连接
-				if datasourceName, ok := panel.Datasource.(string); ok {
-					datasource, err := client.Datasources.GetDataSourceByName(datasourceName)
-					if err != nil {
-						log.Fatalf("Error getting datasource by name: %v", err)
-						continue
-					}
-					log.Debugf("Datasource Name: %s, Datasource Type: %s\n", datasource.Payload.Name, datasource.Payload.Type)
-
-					// 判断是否为 PG，非 PG 跳过
-					if datasource.Payload.Type != "postgres" {
-						continue
-					}
-
-					db, err = sql.Open("postgres", datasource.Payload.URL)
-					if err != nil {
-						log.Fatal("sql.Open err: ", err)
-					}
-					defer db.Close()
-				}
-
-				log.Debugf("Panel ID: %d, Panel Type: %s, Panel Title: %s\n", panel.ID, panel.Type, panel.Title)
-
-				var dependencies []*lineage.Table
-
-				for _, t := range panel.Targets {
-					var r []*lineage.Table
-
-					if t.RawSQL != "" { // custom raw SQL query
-						log.Debugf("Panel Datasource: %s, Panel RawSQL: %s\n", panel.Datasource, t.RawSQL)
-						r, _ = parseRawSQL(t.RawSQL, db)
-					}
-					if t.Query != "" { // influxdb query
-						log.Debugf("Panel Datasource: %s, Panel Query: %s\n", panel.Datasource, t.Query)
-						r, _ = parseRawSQL(t.Query, db)
-					}
-
-					if len(r) > 0 {
-						dependencies = append(dependencies, r...)
-					}
-				}
-
-				if len(dependencies) > 0 {
-					lineage.CreatePanelGraph(session, &panel, &dashboard, dependencies)
-				}
+				log.Errorf("Error processing dashboard item: %v", err)
 			}
 		}
 
-		// 增加页码，准备下一页查询
 		pageVar++
 	}
 
+	return nil
 }
 
-// TODO:访问数据源，获取Function的定义
-func parseRawSQL(rawsql string, db *sql.DB) ([]*lineage.Table, error) {
+func processDashboardItem(client *grafanaclient.GrafanaHTTPAPI, neo4jDriver neo4j.Driver, db *sql.DB, dashboardItem *models.Hit) error {
+	dashboardFullWithMeta, err := client.Dashboards.GetDashboardByUID(dashboardItem.UID)
+	if err != nil {
+		return fmt.Errorf("error getting dashboard by UID: %v", err)
+	}
 
-	// 一个 udf 会生成一颗 Tree
+	var dashboard lineage.DashboardFullWithMeta
+	dashboardJSON, err := json.Marshal(dashboardFullWithMeta.Payload)
+	if err != nil {
+		return fmt.Errorf("error marshalling dashboard JSON: %v", err)
+	}
+
+	err = json.Unmarshal(dashboardJSON, &dashboard)
+	if err != nil {
+		return fmt.Errorf("error unmarshalling dashboard JSON: %v", err)
+	}
+
+	log.Debugf("Dashboard Title: %s\n", dashboard.Dashboard.Title)
+	for _, panel := range dashboard.Dashboard.Panels {
+		if panel.Datasource == nil {
+			continue
+		}
+
+		if datasourceName, ok := panel.Datasource.(string); ok {
+			datasource, err := client.Datasources.GetDataSourceByName(datasourceName)
+			if err != nil {
+				log.Errorf("Error getting datasource by name: %v", err)
+				continue
+			}
+			log.Debugf("Datasource Name: %s, Datasource Type: %s\n", datasource.Payload.Name, datasource.Payload.Type)
+
+			if datasource.Payload.Type != "postgres" || !strings.Contains(config.Postgres.DSN, datasource.Payload.URL) {
+				continue
+			}
+		} else {
+			log.Error("Datasource is not a string")
+			continue
+		}
+
+		log.Debugf("Panel ID: %d, Panel Type: %s, Panel Title: %s\n", panel.ID, panel.Type, panel.Title)
+
+		dependencies, err := getPanelDependencies(db, panel)
+		if err != nil {
+			log.Errorf("Error getting panel dependencies: %v", err)
+			continue
+		}
+
+		if len(dependencies) > 0 {
+			lineage.CreatePanelGraph(neo4jDriver.NewSession(neo4j.SessionConfig{}), &panel, &dashboard, dependencies)
+		}
+	}
+
+	return nil
+}
+
+func getPanelDependencies(db *sql.DB, panel lineage.Panel) ([]*lineage.Table, error) {
+	var dependencies []*lineage.Table
+
+	for _, t := range panel.Targets {
+		var r []*lineage.Table
+
+		if t.RawSQL != "" {
+			log.Debugf("Panel Datasource: %s, Panel RawSQL: %s\n", panel.Datasource, t.RawSQL)
+			r, _ = parseRawSQL(t.RawSQL, db)
+		}
+		if t.Query != "" {
+			log.Debugf("Panel Datasource: %s, Panel Query: %s\n", panel.Datasource, t.Query)
+			r, _ = parseRawSQL(t.Query, db)
+		}
+
+		if len(r) > 0 {
+			dependencies = append(dependencies, r...)
+		}
+	}
+
+	return dependencies, nil
+}
+
+func parseRawSQL(rawsql string, db *sql.DB) ([]*lineage.Table, error) {
 	var sqlTree *depgraph.Graph
 
 	udf, err := lineage.IdentifyFuncCall(rawsql)
@@ -200,7 +204,6 @@ func parseRawSQL(rawsql string, db *sql.DB) ([]*lineage.Table, error) {
 	}
 
 	var depTables []*lineage.Table
-
 	for _, v := range sqlTree.ShrinkGraph().GetNodes() {
 		if r, ok := v.(*lineage.Table); ok {
 			depTables = append(depTables, r)
