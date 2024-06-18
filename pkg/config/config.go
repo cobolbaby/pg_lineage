@@ -20,8 +20,11 @@ type Config struct {
 	} `mapstructure:"neo4j"`
 	Log     log.LoggerConfig
 	Grafana struct {
-		Host string `mapstructure:"host"`
-	}
+		Host     string `mapstructure:"host"`
+		User     string `mapstructure:"user"`
+		Password string `mapstructure:"password"`
+		OrgID    int64  `mapstructure:"org_id"`
+	} `mapstructure:"grafana"`
 }
 
 func InitConfig(cfgFile string) (Config, error) {

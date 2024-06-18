@@ -5,6 +5,7 @@ import (
 	"pg_lineage/pkg/log"
 	"strconv"
 
+	"github.com/grafana/grafana-openapi-client-go/models"
 	"github.com/neo4j/neo4j-go-driver/v4/neo4j"
 )
 
@@ -27,9 +28,9 @@ type Dashboard struct {
 	Tags       []string `json:"tags"`
 	Templating struct {
 		List []struct {
-			Datasource any    `json:"datasource"`
-			Label      any    `json:"label"`
-			Query      string `json:"query"`
+			Datasource any    `json:"datasource,omitempty"`
+			Label      string `json:"label"`
+			Query      any    `json:"query,omitempty"`
 			Type       string `json:"type"`
 		} `json:"list"`
 	} `json:"templating"`
@@ -37,11 +38,18 @@ type Dashboard struct {
 		From string `json:"from"`
 		To   string `json:"to"`
 	} `json:"time"`
-	Timezone    string `json:"timezone"`
-	Title       string `json:"title"`
-	UID         string `json:"uid"`
-	Version     int    `json:"version"`
-	FolderTitle string `json:"folderTitle,omitempty"`
+	Timezone string `json:"timezone"`
+	Title    string `json:"title"`
+	UID      string `json:"uid"`
+	Version  int    `json:"version"`
+}
+
+type DashboardFullWithMeta struct {
+	// dashboard
+	Dashboard Dashboard `json:"dashboard,omitempty"`
+
+	// meta
+	Meta *models.DashboardMeta `json:"meta,omitempty"`
 }
 
 func (p *Panel) GetID() string {
@@ -52,7 +60,7 @@ func (p *Panel) IsTemp() bool {
 	return false
 }
 
-func CreatePanelGraph(session neo4j.Session, p *Panel, d *Dashboard, dependencies []*Table) error {
+func CreatePanelGraph(session neo4j.Session, p *Panel, d *DashboardFullWithMeta, dependencies []*Table) error {
 
 	// 开始事务
 	tx, err := session.BeginTransaction()
@@ -83,18 +91,18 @@ func CreatePanelGraph(session neo4j.Session, p *Panel, d *Dashboard, dependencie
 }
 
 // 创建图中节点
-func CreatePanelNode(tx neo4j.Transaction, p *Panel, d *Dashboard) (*Panel, error) {
+func CreatePanelNode(tx neo4j.Transaction, p *Panel, d *DashboardFullWithMeta) (*Panel, error) {
 	// 需要将 ID 作为唯一主键
 	// CREATE CONSTRAINT ON (cc:Lineage:Grafana) ASSERT cc.id IS UNIQUE
 	records, err := tx.Run(`
-		MERGE (n:Lineage:Grafana:`+d.FolderTitle+` {id: $id}) 
+		MERGE (n:Lineage:Grafana:`+d.Meta.FolderTitle+` {id: $id}) 
 		ON CREATE SET n.dashboard = $dashboard, n.panel = $panel, n.rawsql = $rawsql, n.udt = timestamp()
 		ON MATCH SET n.udt = timestamp()
 		RETURN n.id
 	`,
 		map[string]interface{}{
-			"id":        fmt.Sprintf("%d:%d", d.ID, p.ID),
-			"dashboard": d.Title,
+			"id":        fmt.Sprintf("%d:%d", d.Dashboard.ID, p.ID),
+			"dashboard": d.Dashboard.Title,
 			"panel":     p.Title,
 			"rawsql":    "",
 		})
@@ -113,7 +121,7 @@ func CreatePanelNode(tx neo4j.Transaction, p *Panel, d *Dashboard) (*Panel, erro
 }
 
 // 创建图中边
-func CreatePanelEdge(tx neo4j.Transaction, p *Panel, d *Dashboard, t *Table) error {
+func CreatePanelEdge(tx neo4j.Transaction, p *Panel, d *DashboardFullWithMeta, t *Table) error {
 	_, err := tx.Run(`
 		MATCH (pnode:Lineage:PG:$schmea {id: $pid}), (cnode:Lineage:Grafana {id: $cid})
 		CREATE (pnode)-[e:DownStream {udt: timestamp()}]->(cnode)
@@ -121,7 +129,7 @@ func CreatePanelEdge(tx neo4j.Transaction, p *Panel, d *Dashboard, t *Table) err
 	`, map[string]interface{}{
 		"schema": t.SchemaName,
 		"pid":    fmt.Sprintf("%s.%s.%s", t.Database, t.SchemaName, t.RelName),
-		"cid":    fmt.Sprintf("%d:%d", d.ID, p.ID),
+		"cid":    fmt.Sprintf("%d:%d", d.Dashboard.ID, p.ID),
 	})
 
 	return err
