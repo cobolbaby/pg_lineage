@@ -117,9 +117,9 @@ func CreatePanelNode(tx neo4j.Transaction, p *Panel, d *DashboardFullWithMeta) e
 			"panel_title":       p.Title,
 			"panel_description": p.Description,
 			"rawsql":            "",
-			"created":           d.Meta.Created,
+			"created":           d.Meta.Created.String(),
 			"created_by":        d.Meta.CreatedBy,
-			"updated":           d.Meta.Updated,
+			"updated":           d.Meta.Updated.String(),
 			"updated_by":        d.Meta.UpdatedBy,
 		})
 
