@@ -150,32 +150,27 @@ func processDashboardItem(client *grafanaclient.GrafanaHTTPAPI, neo4jDriver neo4
 
 		var datasource *models.DataSource
 
-		if datasourceName, ok := panel.Datasource.(string); ok {
-			cache.mu.Lock()
-			var found bool
-			if datasource, found = cache.cache[datasourceName]; !found {
-				ds, err := client.Datasources.GetDataSourceByName(datasourceName)
-				if err != nil {
-					cache.mu.Unlock()
-					log.Errorf("Error getting datasource by name %s: %v", datasourceName, err)
-					continue
-				}
-				datasource = ds.Payload
-				cache.cache[datasourceName] = ds.Payload
-			}
-			cache.mu.Unlock()
+		switch ds := panel.Datasource.(type) {
+		case string:
+			datasource, err = getDatasourceByName(client, cache, ds)
+		case map[string]any:
+			datasource, err = getDatasourceByObject(client, cache, ds)
+		default:
+			log.Errorf("Unknown datasource type: %T", panel.Datasource)
+			continue
+		}
 
-			log.Debugf("Datasource Name: %s, Datasource Type: %s, Datasource Database: %s", datasource.Name, datasource.Type, datasource.Database)
+		if err != nil {
+			log.Errorf("Error getting datasource %s: %v", panel.Datasource, err)
+			continue
+		}
 
-			if datasource.Type != "postgres" || datasource.Database != "bdc" {
-				continue
-			}
-			if !dsMatchRule.MatchString(datasource.URL) {
-				continue
-			}
+		log.Debugf("Datasource Name: %s, Datasource Type: %s, Datasource Database: %s", datasource.Name, datasource.Type, datasource.Database)
 
-		} else {
-			log.Errorf("Datasource is %v, not a string", panel.Datasource)
+		if datasource.Type != "postgres" || datasource.Database != "bdc" {
+			continue
+		}
+		if !dsMatchRule.MatchString(datasource.URL) {
 			continue
 		}
 
@@ -193,6 +188,49 @@ func processDashboardItem(client *grafanaclient.GrafanaHTTPAPI, neo4jDriver neo4
 	}
 
 	return nil
+}
+
+func getDatasourceByName(client *grafanaclient.GrafanaHTTPAPI, cache *DataSourceCache, name string) (*models.DataSource, error) {
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+
+	if cachedDatasource, found := cache.cache[name]; found {
+		return cachedDatasource, nil
+	}
+
+	ds, err := client.Datasources.GetDataSourceByName(name)
+	if err != nil {
+		return nil, err
+	}
+	cache.cache[name] = ds.Payload
+
+	return ds.Payload, nil
+}
+
+func getDatasourceByObject(client *grafanaclient.GrafanaHTTPAPI, cache *DataSourceCache, input map[string]any) (*models.DataSource, error) {
+	if input["uid"] == nil || input["type"] == nil {
+		return nil, fmt.Errorf("invalid datasource object")
+	}
+
+	uid, ok := input["uid"].(string)
+	if !ok {
+		return nil, fmt.Errorf("invalid uid type")
+	}
+
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+
+	if cachedDatasource, found := cache.cache[uid]; found {
+		return cachedDatasource, nil
+	}
+
+	ds, err := client.Datasources.GetDataSourceByUID(uid)
+	if err != nil {
+		return nil, err
+	}
+	cache.cache[uid] = ds.Payload
+
+	return ds.Payload, nil
 }
 
 func getPanelDependencies(panel *lineage.Panel, db *sql.DB) ([]*lineage.Table, error) {
