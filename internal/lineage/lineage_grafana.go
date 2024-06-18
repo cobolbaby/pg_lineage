@@ -2,6 +2,7 @@ package lineage
 
 import (
 	"fmt"
+	"pg_lineage/pkg/log"
 	"strconv"
 
 	"github.com/neo4j/neo4j-go-driver/v4/neo4j"
@@ -49,6 +50,36 @@ func (p *Panel) GetID() string {
 
 func (p *Panel) IsTemp() bool {
 	return false
+}
+
+func CreatePanelGraph(session neo4j.Session, p *Panel, d *Dashboard, dependencies []*Table) error {
+
+	// 开始事务
+	tx, err := session.BeginTransaction()
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Close()
+
+	if _, err := CreatePanelNode(tx, p, d); err != nil {
+		return fmt.Errorf("failed to insert Panel node: %w", err)
+	}
+
+	// 插入表节点并创建边
+	for _, r := range dependencies {
+		if err := CreatePanelEdge(tx, p, d, r); err != nil {
+			// return fmt.Errorf("failed to create relationship: %w", err)
+			log.Errorf("failed to create relationship: %w", err)
+			continue
+		}
+	}
+
+	// 提交事务
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	return nil
 }
 
 // 创建图中节点

@@ -72,6 +72,14 @@ func main() {
 	}
 	defer neo4jDriver.Close()
 
+	// Sessions are short-lived, cheap to create and NOT thread safe. Typically create one or more sessions
+	// per request in your web application. Make sure to call Close on the session when done.
+	// For multi-database support, set sessionConfig.DatabaseName to requested database
+	// Session config will default to write mode, if only reads are to be used configure session for
+	// read mode.
+	session := neo4jDriver.NewSession(neo4j.SessionConfig{})
+	defer session.Close()
+
 	typeVar := "dash-db"
 	pageVar := int64(1)
 	limitVar := int64(100)
@@ -164,7 +172,7 @@ func main() {
 				}
 
 				if len(dependencies) > 0 {
-					generateDashboardLineage(neo4jDriver, &panel, &dashboard, dependencies)
+					lineage.CreatePanelGraph(session, &panel, &dashboard, dependencies)
 				}
 			}
 		}
@@ -200,40 +208,4 @@ func parseRawSQL(rawsql string, db *sql.DB) ([]*lineage.Table, error) {
 	}
 
 	return depTables, nil
-}
-
-func generateDashboardLineage(driver neo4j.Driver, p *lineage.Panel, d *lineage.Dashboard, dependencies []*lineage.Table) error {
-
-	// Sessions are short-lived, cheap to create and NOT thread safe. Typically create one or more sessions
-	// per request in your web application. Make sure to call Close on the session when done.
-	// For multi-database support, set sessionConfig.DatabaseName to requested database
-	// Session config will default to write mode, if only reads are to be used configure session for
-	// read mode.
-	session := driver.NewSession(neo4j.SessionConfig{})
-	defer session.Close()
-
-	// 开始事务
-	tx, err := session.BeginTransaction()
-	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer tx.Close()
-
-	if _, err := lineage.CreatePanelNode(tx, p, d); err != nil {
-		return fmt.Errorf("failed to insert Panel node: %w", err)
-	}
-
-	// 插入表节点并创建边
-	for _, r := range dependencies {
-		if err := lineage.CreatePanelEdge(tx, p, d, r); err != nil {
-			return fmt.Errorf("failed to create relationship: %w", err)
-		}
-	}
-
-	// 提交事务
-	if err = tx.Commit(); err != nil {
-		return fmt.Errorf("failed to commit transaction: %w", err)
-	}
-
-	return nil
 }

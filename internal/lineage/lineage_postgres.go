@@ -18,7 +18,7 @@ func ResetGraph(session neo4j.Session) error {
 	return err
 }
 
-func CreateGraph(session neo4j.Session, graph *depgraph.Graph, extends *Udf) error {
+func CreateGraph(session neo4j.Session, graph *depgraph.Graph, udf *Udf) error {
 
 	log.Infof("ShrinkGraph: %+v", graph)
 	for i, layer := range graph.TopoSortedLayers() {
@@ -29,14 +29,15 @@ func CreateGraph(session neo4j.Session, graph *depgraph.Graph, extends *Udf) err
 		// 创建点
 		for _, v := range graph.GetNodes() {
 			r, _ := v.(*Table)
-			r.Database = graph.GetNamespace()
-			r.Calls = extends.Calls
 
 			// fix: ShrinkGraph 中仍然存在临时节点
 			if r.SchemaName == "" {
 				log.Warnf("Invalid r.SchemaName: %+v", r)
 				continue
 			}
+
+			r.Database = graph.GetNamespace()
+			r.Calls = udf.Calls
 
 			if _, err := CreateNode(tx, r); err != nil {
 				return nil, err
@@ -45,10 +46,12 @@ func CreateGraph(session neo4j.Session, graph *depgraph.Graph, extends *Udf) err
 		// 创建线
 		for k, v := range graph.GetRelationships() {
 			for kk := range v {
-				extends.SrcID = k // 不含 namespace
-				extends.DestID = kk
-				extends.Database = graph.GetNamespace()
-				if _, err := CreateEdge(tx, extends); err != nil {
+
+				udf.SrcID = k // 不含 namespace
+				udf.DestID = kk
+				udf.Database = graph.GetNamespace()
+
+				if _, err := CreateEdge(tx, udf); err != nil {
 					return nil, err
 				}
 			}
