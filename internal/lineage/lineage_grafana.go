@@ -75,6 +75,12 @@ func CreatePanelGraph(session neo4j.Session, p *Panel, d *DashboardFullWithMeta,
 
 	// 插入表节点并创建边
 	for _, r := range dependencies {
+		// fix: ShrinkGraph 中仍然存在临时节点
+		if r.SchemaName == "" {
+			log.Warnf("Invalid r.SchemaName: %+v", r)
+			continue
+		}
+
 		if err := CreatePanelEdge(tx, p, d, r); err != nil {
 			// return fmt.Errorf("failed to create relationship: %w", err)
 			log.Errorf("failed to create relationship: %w", err)
@@ -98,7 +104,7 @@ func CreatePanelNode(tx neo4j.Transaction, p *Panel, d *DashboardFullWithMeta) e
 		MERGE (n:Lineage:Grafana:`+d.Meta.FolderTitle+` {id: $id}) 
 		ON CREATE SET n.dashboard_title = $dashboard_title, n.dashboard_uid = $dashboard_uid,
 					  n.panel_type = $panel_type, n.panel_title = $panel_title, n.panel_description = $panel_description,
-					  n.rawsql = $rawsql, n.udt = timestamp(),
+					  n.rawsql = $rawsql, n.udt = timestamp()
 		ON MATCH SET n.udt = timestamp()
 		RETURN n.id
 	`,
