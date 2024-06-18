@@ -20,10 +20,11 @@ type Config struct {
 	} `mapstructure:"neo4j"`
 	Log     log.LoggerConfig
 	Grafana struct {
-		Host     string `mapstructure:"host"`
-		User     string `mapstructure:"user"`
-		Password string `mapstructure:"password"`
-		OrgID    int64  `mapstructure:"org_id"`
+		Host                 string `mapstructure:"host"`
+		User                 string `mapstructure:"user"`
+		Password             string `mapstructure:"password"`
+		OrgID                int64  `mapstructure:"org_id"`
+		DataSourceMatchRules string `mapstructure:"ds_match_rules"`
 	} `mapstructure:"grafana"`
 }
 

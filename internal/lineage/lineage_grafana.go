@@ -24,7 +24,7 @@ type Panel struct {
 
 type Dashboard struct {
 	ID         int      `json:"id"`
-	Panels     []Panel  `json:"panels"`
+	Panels     []*Panel `json:"panels"`
 	Tags       []string `json:"tags"`
 	Templating struct {
 		List []struct {
@@ -69,7 +69,7 @@ func CreatePanelGraph(session neo4j.Session, p *Panel, d *DashboardFullWithMeta,
 	}
 	defer tx.Close()
 
-	if _, err := CreatePanelNode(tx, p, d); err != nil {
+	if err := CreatePanelNode(tx, p, d); err != nil {
 		return fmt.Errorf("failed to insert Panel node: %w", err)
 	}
 
@@ -83,7 +83,7 @@ func CreatePanelGraph(session neo4j.Session, p *Panel, d *DashboardFullWithMeta,
 	}
 
 	// 提交事务
-	if err = tx.Commit(); err != nil {
+	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
@@ -91,45 +91,39 @@ func CreatePanelGraph(session neo4j.Session, p *Panel, d *DashboardFullWithMeta,
 }
 
 // 创建图中节点
-func CreatePanelNode(tx neo4j.Transaction, p *Panel, d *DashboardFullWithMeta) (*Panel, error) {
+func CreatePanelNode(tx neo4j.Transaction, p *Panel, d *DashboardFullWithMeta) error {
 	// 需要将 ID 作为唯一主键
 	// CREATE CONSTRAINT ON (cc:Lineage:Grafana) ASSERT cc.id IS UNIQUE
-	records, err := tx.Run(`
+	_, err := tx.Run(`
 		MERGE (n:Lineage:Grafana:`+d.Meta.FolderTitle+` {id: $id}) 
-		ON CREATE SET n.dashboard = $dashboard, n.panel = $panel, n.rawsql = $rawsql, n.udt = timestamp()
+		ON CREATE SET n.dashboard_title = $dashboard_title, n.dashboard_uid = $dashboard_uid,
+					  n.panel_type = $panel_type, n.panel_title = $panel_title, n.panel_description = $panel_description,
+					  n.rawsql = $rawsql, n.udt = timestamp(),
 		ON MATCH SET n.udt = timestamp()
 		RETURN n.id
 	`,
 		map[string]interface{}{
-			"id":        fmt.Sprintf("%d:%d", d.Dashboard.ID, p.ID),
-			"dashboard": d.Dashboard.Title,
-			"panel":     p.Title,
-			"rawsql":    "",
+			"id":                fmt.Sprintf("%d:%d", d.Dashboard.ID, p.ID),
+			"dashboard_title":   d.Dashboard.Title,
+			"dashboard_uid":     d.Dashboard.UID,
+			"panel_type":        p.Type,
+			"panel_title":       p.Title,
+			"panel_description": p.Description,
+			"rawsql":            "",
 		})
-	// In face of driver native errors, make sure to return them directly.
-	// Depending on the error, the driver may try to execute the function again.
-	if err != nil {
-		return nil, err
-	}
-	record, err := records.Single()
-	if err != nil {
-		return nil, err
-	}
-	// You can also retrieve values by name, with e.g. `id, found := record.Get("n.id")`
-	p.ID = record.Values[0].(int)
-	return p, nil
+
+	return err
 }
 
 // 创建图中边
 func CreatePanelEdge(tx neo4j.Transaction, p *Panel, d *DashboardFullWithMeta, t *Table) error {
 	_, err := tx.Run(`
-		MATCH (pnode:Lineage:PG:$schmea {id: $pid}), (cnode:Lineage:Grafana {id: $cid})
+		MATCH (pnode:Lineage:PG:`+t.SchemaName+` {id: $pid}), (cnode:Lineage:Grafana {id: $cid})
 		CREATE (pnode)-[e:DownStream {udt: timestamp()}]->(cnode)
 		RETURN e
 	`, map[string]interface{}{
-		"schema": t.SchemaName,
-		"pid":    fmt.Sprintf("%s.%s.%s", t.Database, t.SchemaName, t.RelName),
-		"cid":    fmt.Sprintf("%d:%d", d.Dashboard.ID, p.ID),
+		"pid": fmt.Sprintf("%s.%s.%s", t.Database, t.SchemaName, t.RelName),
+		"cid": fmt.Sprintf("%d:%d", d.Dashboard.ID, p.ID),
 	})
 
 	return err

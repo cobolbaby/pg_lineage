@@ -39,7 +39,7 @@ func CreateGraph(session neo4j.Session, graph *depgraph.Graph, udf *Udf) error {
 			r.Database = graph.GetNamespace()
 			r.Calls = udf.Calls
 
-			if _, err := CreateNode(tx, r); err != nil {
+			if err := CreateNode(tx, r); err != nil {
 				return nil, err
 			}
 		}
@@ -51,7 +51,7 @@ func CreateGraph(session neo4j.Session, graph *depgraph.Graph, udf *Udf) error {
 				udf.DestID = kk
 				udf.Database = graph.GetNamespace()
 
-				if _, err := CreateEdge(tx, udf); err != nil {
+				if err := CreateEdge(tx, udf); err != nil {
 					return nil, err
 				}
 			}
@@ -69,10 +69,10 @@ func CreateGraph(session neo4j.Session, graph *depgraph.Graph, udf *Udf) error {
 // 3. 对现有服务的改造，就时重写下面两个方法
 
 // 创建图中节点
-func CreateNode(tx neo4j.Transaction, r *Table) (*Table, error) {
+func CreateNode(tx neo4j.Transaction, r *Table) error {
 	// 需要将 ID 作为唯一主键
 	// CREATE CONSTRAINT ON (cc:Lineage:PG) ASSERT cc.id IS UNIQUE
-	records, err := tx.Run(`
+	_, err := tx.Run(`
 		MERGE (n:Lineage:PG:`+r.SchemaName+` {id: $id}) 
 		ON CREATE SET n.database = $database, n.schemaname = $schemaname, n.relname = $relname, n.udt = timestamp(), 
 					n.relpersistence = $relpersistence, n.calls = $calls
@@ -87,22 +87,12 @@ func CreateNode(tx neo4j.Transaction, r *Table) (*Table, error) {
 			"relpersistence": r.RelPersistence,
 			"calls":          r.Calls,
 		})
-	// In face of driver native errors, make sure to return them directly.
-	// Depending on the error, the driver may try to execute the function again.
-	if err != nil {
-		return nil, err
-	}
-	record, err := records.Single()
-	if err != nil {
-		return nil, err
-	}
-	// You can also retrieve values by name, with e.g. `id, found := record.Get("n.id")`
-	r.ID = record.Values[0].(string)
-	return r, nil
+
+	return err
 }
 
 // 创建图中边
-func CreateEdge(tx neo4j.Transaction, r *Udf) (*Udf, error) {
+func CreateEdge(tx neo4j.Transaction, r *Udf) error {
 	_, err := tx.Run(`
 		MATCH (pnode {id: $pid}), (cnode {id: $cid})
 		CREATE (pnode)-[e:DownStream {id: $id, database: $database, schemaname: $schemaname, procname: $procname, calls: $calls, udt: timestamp()}]->(cnode)
@@ -117,7 +107,7 @@ func CreateEdge(tx neo4j.Transaction, r *Udf) (*Udf, error) {
 		"calls":      r.Calls,
 	})
 
-	return nil, err
+	return err
 }
 
 func CompleteLineageGraphInfo(session neo4j.Session, r *Table) error {
@@ -149,5 +139,6 @@ func CompleteLineageGraphInfo(session neo4j.Session, r *Table) error {
 		}
 		return result.Consume()
 	})
+
 	return err
 }

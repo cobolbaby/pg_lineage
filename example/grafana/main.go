@@ -7,7 +7,8 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-	"strings"
+	"regexp"
+	"sync"
 
 	"pg_lineage/internal/lineage"
 	C "pg_lineage/pkg/config"
@@ -22,7 +23,15 @@ import (
 	"github.com/neo4j/neo4j-go-driver/v4/neo4j"
 )
 
-var config C.Config
+type DataSourceCache struct {
+	cache map[string]*models.DataSource
+	mu    sync.Mutex
+}
+
+var (
+	dsMatchRule *regexp.Regexp
+	config      C.Config
+)
 
 func init() {
 	configFile := flag.String("c", "./config.yaml", "path to config.yaml")
@@ -37,6 +46,7 @@ func init() {
 		fmt.Println(err)
 		os.Exit(1)
 	}
+	dsMatchRule = regexp.MustCompile(config.Grafana.DataSourceMatchRules)
 }
 
 func main() {
@@ -88,6 +98,10 @@ func processDashboards(client *grafanaclient.GrafanaHTTPAPI, neo4jDriver neo4j.D
 	pageVar := int64(1)
 	limitVar := int64(100)
 
+	dsCache := &DataSourceCache{
+		cache: make(map[string]*models.DataSource),
+	}
+
 	for {
 		params := grafanasearch.NewSearchParams().WithType(&typeVar).WithPage(&pageVar).WithLimit(&limitVar)
 		dashboards, err := client.Search.Search(params)
@@ -100,7 +114,7 @@ func processDashboards(client *grafanaclient.GrafanaHTTPAPI, neo4jDriver neo4j.D
 		}
 
 		for _, dashboardItem := range dashboards.Payload {
-			err := processDashboardItem(client, neo4jDriver, db, dashboardItem)
+			err := processDashboardItem(client, neo4jDriver, db, dashboardItem, dsCache)
 			if err != nil {
 				log.Errorf("Error processing dashboard item: %v", err)
 			}
@@ -112,73 +126,87 @@ func processDashboards(client *grafanaclient.GrafanaHTTPAPI, neo4jDriver neo4j.D
 	return nil
 }
 
-func processDashboardItem(client *grafanaclient.GrafanaHTTPAPI, neo4jDriver neo4j.Driver, db *sql.DB, dashboardItem *models.Hit) error {
+func processDashboardItem(client *grafanaclient.GrafanaHTTPAPI, neo4jDriver neo4j.Driver, db *sql.DB, dashboardItem *models.Hit, cache *DataSourceCache) error {
 	dashboardFullWithMeta, err := client.Dashboards.GetDashboardByUID(dashboardItem.UID)
 	if err != nil {
 		return fmt.Errorf("error getting dashboard by UID: %v", err)
 	}
 
-	var dashboard lineage.DashboardFullWithMeta
+	var dashboard *lineage.DashboardFullWithMeta
 	dashboardJSON, err := json.Marshal(dashboardFullWithMeta.Payload)
 	if err != nil {
 		return fmt.Errorf("error marshalling dashboard JSON: %v", err)
 	}
 
-	err = json.Unmarshal(dashboardJSON, &dashboard)
-	if err != nil {
+	if err = json.Unmarshal(dashboardJSON, &dashboard); err != nil {
 		return fmt.Errorf("error unmarshalling dashboard JSON: %v", err)
 	}
 
-	log.Debugf("Dashboard Title: %s\n", dashboard.Dashboard.Title)
+	log.Debugf("Dashboard Title: %s", dashboard.Dashboard.Title)
 	for _, panel := range dashboard.Dashboard.Panels {
 		if panel.Datasource == nil {
 			continue
 		}
 
-		if datasourceName, ok := panel.Datasource.(string); ok {
-			datasource, err := client.Datasources.GetDataSourceByName(datasourceName)
-			if err != nil {
-				log.Errorf("Error getting datasource by name: %v", err)
-				continue
-			}
-			log.Debugf("Datasource Name: %s, Datasource Type: %s\n", datasource.Payload.Name, datasource.Payload.Type)
+		var datasource *models.DataSource
 
-			if datasource.Payload.Type != "postgres" || !strings.Contains(config.Postgres.DSN, datasource.Payload.URL) {
+		if datasourceName, ok := panel.Datasource.(string); ok {
+			cache.mu.Lock()
+			var found bool
+			if datasource, found = cache.cache[datasourceName]; !found {
+				ds, err := client.Datasources.GetDataSourceByName(datasourceName)
+				if err != nil {
+					cache.mu.Unlock()
+					log.Errorf("Error getting datasource by name %s: %v", datasourceName, err)
+					continue
+				}
+				datasource = ds.Payload
+				cache.cache[datasourceName] = ds.Payload
+			}
+			cache.mu.Unlock()
+
+			log.Debugf("Datasource Name: %s, Datasource Type: %s, Datasource Database: %s", datasource.Name, datasource.Type, datasource.Database)
+
+			if datasource.Type != "postgres" || datasource.Database != "bdc" {
 				continue
 			}
+			if !dsMatchRule.MatchString(datasource.URL) {
+				continue
+			}
+
 		} else {
-			log.Error("Datasource is not a string")
+			log.Errorf("Datasource is %v, not a string", panel.Datasource)
 			continue
 		}
 
-		log.Debugf("Panel ID: %d, Panel Type: %s, Panel Title: %s\n", panel.ID, panel.Type, panel.Title)
+		log.Debugf("Panel ID: %d, Panel Type: %s, Panel Title: %s", panel.ID, panel.Type, panel.Title)
 
-		dependencies, err := getPanelDependencies(db, panel)
+		dependencies, err := getPanelDependencies(panel, db)
 		if err != nil {
 			log.Errorf("Error getting panel dependencies: %v", err)
 			continue
 		}
 
 		if len(dependencies) > 0 {
-			lineage.CreatePanelGraph(neo4jDriver.NewSession(neo4j.SessionConfig{}), &panel, &dashboard, dependencies)
+			lineage.CreatePanelGraph(neo4jDriver.NewSession(neo4j.SessionConfig{}), panel, dashboard, dependencies)
 		}
 	}
 
 	return nil
 }
 
-func getPanelDependencies(db *sql.DB, panel lineage.Panel) ([]*lineage.Table, error) {
+func getPanelDependencies(panel *lineage.Panel, db *sql.DB) ([]*lineage.Table, error) {
 	var dependencies []*lineage.Table
 
 	for _, t := range panel.Targets {
 		var r []*lineage.Table
 
 		if t.RawSQL != "" {
-			log.Debugf("Panel Datasource: %s, Panel RawSQL: %s\n", panel.Datasource, t.RawSQL)
+			log.Debugf("Panel Datasource: %s, Panel RawSQL: %s", panel.Datasource, t.RawSQL)
 			r, _ = parseRawSQL(t.RawSQL, db)
 		}
 		if t.Query != "" {
-			log.Debugf("Panel Datasource: %s, Panel Query: %s\n", panel.Datasource, t.Query)
+			log.Debugf("Panel Datasource: %s, Panel Query: %s", panel.Datasource, t.Query)
 			r, _ = parseRawSQL(t.Query, db)
 		}
 
@@ -203,9 +231,14 @@ func parseRawSQL(rawsql string, db *sql.DB) ([]*lineage.Table, error) {
 		return nil, err
 	}
 
+	// TODO:操作得前置
+	sqlTree.SetNamespace(config.Postgres.Alias)
+
 	var depTables []*lineage.Table
 	for _, v := range sqlTree.ShrinkGraph().GetNodes() {
 		if r, ok := v.(*lineage.Table); ok {
+			r.Database = sqlTree.GetNamespace()
+
 			depTables = append(depTables, r)
 		}
 	}

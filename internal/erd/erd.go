@@ -45,7 +45,7 @@ func CreateGraph(session neo4j.Session, relationShips map[string]*RelationShip) 
 
 func CreateNode(tx neo4j.Transaction, r *Column) error {
 	// CREATE CONSTRAINT ON (cc:ERD:PG) ASSERT cc.id IS UNIQUE
-	records, err := tx.Run(`
+	_, err := tx.Run(`
 		MERGE (n:ERD:PG:`+r.Schema+` {id: $id}) 
 		ON CREATE SET n.schemaname = $schemaname, n.relname = $relname, n.udt = timestamp()
 		ON MATCH SET n.udt = timestamp()
@@ -56,15 +56,8 @@ func CreateNode(tx neo4j.Transaction, r *Column) error {
 			"schemaname": r.Schema,
 			"relname":    r.RelName,
 		})
-	// In face of driver native errors, make sure to return them directly.
-	// Depending on the error, the driver may try to execute the function again.
-	if err != nil {
-		return err
-	}
-	if _, err := records.Single(); err != nil {
-		return err
-	}
-	return nil
+
+	return err
 }
 
 func CreateEdge(tx neo4j.Transaction, id string, r *RelationShip) error {
@@ -96,5 +89,6 @@ func CreateEdge(tx neo4j.Transaction, id string, r *RelationShip) error {
 		"rarg": r.TColumn.Schema + "." + r.TColumn.RelName + "." + r.TColumn.Field,
 		"type": r.Type,
 	})
+
 	return err
 }
