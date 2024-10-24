@@ -4,3 +4,4 @@ logs
 vendor
 .fuse*
 __debug_bin*
+*.csv
