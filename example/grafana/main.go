@@ -185,7 +185,7 @@ func processDashboardItem(client *grafanaclient.GrafanaHTTPAPI, neo4jDriver neo4
 		if len(dependencies) > 0 {
 			if err := lineage.CreatePanelGraph(
 				neo4jDriver.NewSession(neo4j.SessionConfig{}),
-				panel, dashboard, dependencies); err != nil {
+				panel, dashboard, config.Grafana.Host, dependencies); err != nil {
 				log.Errorf("Error creating panel graph: %v", err)
 			}
 		}

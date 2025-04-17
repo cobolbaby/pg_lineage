@@ -60,7 +60,7 @@ func (p *Panel) IsTemp() bool {
 	return false
 }
 
-func CreatePanelGraph(session neo4j.Session, p *Panel, d *DashboardFullWithMeta, dependencies []*Table) error {
+func CreatePanelGraph(session neo4j.Session, p *Panel, d *DashboardFullWithMeta, s string, dependencies []*Table) error {
 
 	// 开始事务
 	tx, err := session.BeginTransaction()
@@ -69,7 +69,7 @@ func CreatePanelGraph(session neo4j.Session, p *Panel, d *DashboardFullWithMeta,
 	}
 	defer tx.Close()
 
-	if err := CreatePanelNode(tx, p, d); err != nil {
+	if err := CreatePanelNode(tx, p, d, s); err != nil {
 		return fmt.Errorf("failed to insert Panel node: %w", err)
 	}
 
@@ -81,7 +81,7 @@ func CreatePanelGraph(session neo4j.Session, p *Panel, d *DashboardFullWithMeta,
 			continue
 		}
 
-		if err := CreatePanelEdge(tx, p, d, r); err != nil {
+		if err := CreatePanelEdge(tx, p, d, s, r); err != nil {
 			// return fmt.Errorf("failed to create relationship: %w", err)
 			log.Errorf("failed to create relationship: %w", err)
 			continue
@@ -97,11 +97,11 @@ func CreatePanelGraph(session neo4j.Session, p *Panel, d *DashboardFullWithMeta,
 }
 
 // 创建图中节点
-func CreatePanelNode(tx neo4j.Transaction, p *Panel, d *DashboardFullWithMeta) error {
+func CreatePanelNode(tx neo4j.Transaction, p *Panel, d *DashboardFullWithMeta, s string) error {
 	// 需要将 ID 作为唯一主键
-	// CREATE CONSTRAINT ON (cc:Lineage:Grafana) ASSERT cc.id IS UNIQUE
+	// CREATE CONSTRAINT ON (cc:lineage:grafana) ASSERT cc.id IS UNIQUE
 	_, err := tx.Run(`
-		MERGE (n:Lineage:Grafana:`+d.Meta.FolderTitle+` {id: $id}) 
+		MERGE (n:lineage:grafana:`+escapeLabel(s)+`:`+d.Meta.FolderTitle+` {id: $id}) 
 		ON CREATE SET n.dashboard_title = $dashboard_title, n.dashboard_uid = $dashboard_uid,
 					  n.panel_type = $panel_type, n.panel_title = $panel_title, n.panel_description = $panel_description,
 					  n.created = $created, n.created_by = $created_by, n.updated = $updated, n.updated_by = $updated_by,
@@ -110,7 +110,7 @@ func CreatePanelNode(tx neo4j.Transaction, p *Panel, d *DashboardFullWithMeta) e
 		RETURN n.id
 	`,
 		map[string]interface{}{
-			"id":                fmt.Sprintf("%d:%d", d.Dashboard.ID, p.ID),
+			"id":                fmt.Sprintf("%s>%d>%d", s, d.Dashboard.ID, p.ID),
 			"dashboard_title":   d.Dashboard.Title,
 			"dashboard_uid":     d.Dashboard.UID,
 			"panel_type":        p.Type,
@@ -123,19 +123,48 @@ func CreatePanelNode(tx neo4j.Transaction, p *Panel, d *DashboardFullWithMeta) e
 			"updated_by":        d.Meta.UpdatedBy,
 		})
 
+	if p.Title == "" {
+		p.Title = "Untitled Panel"
+	}
+
+	p.Title = fmt.Sprintf("%s %d-%d", p.Title, d.Dashboard.ID, p.ID)
+
+	log.Debugf(`
+		INSERT INTO manager.data_lineage_node(node_name, site, service, domain, node, attribute, type, cdt, udt, author)
+		VALUES (
+			'grafana:` + fmt.Sprintf("%s:%s>%s>%s", s, d.Meta.FolderTitle, d.Dashboard.Title, p.Title) + `', 
+			'', 'grafana', '` + s + `','` + fmt.Sprintf("%s>%s>%s", d.Meta.FolderTitle, d.Dashboard.Title, p.Title) + `', 
+			'{"created": "` + d.Meta.Created.String() + `","updated": "` + d.Meta.Updated.String() + `","created_by": "` + d.Meta.CreatedBy + `","updated_by": "` + d.Meta.UpdatedBy + `","panel_type": "` + p.Type + `","panel_title": "` + p.Title + `","dashboard_uid": "` + d.Dashboard.UID + `","dashboard_title": "` + d.Dashboard.Title + `","panel_description": "` + p.Description + `"}', 
+			'dashboard-panel', now(), now(), 'ITC180012')
+	`)
+
 	return err
 }
 
 // 创建图中边
-func CreatePanelEdge(tx neo4j.Transaction, p *Panel, d *DashboardFullWithMeta, t *Table) error {
+func CreatePanelEdge(tx neo4j.Transaction, p *Panel, d *DashboardFullWithMeta, s string, t *Table) error {
 	_, err := tx.Run(`
-		MATCH (pnode:Lineage:PG:`+t.SchemaName+` {id: $pid}), (cnode:Lineage:Grafana {id: $cid})
+		MATCH (pnode:lineage:postgresql:`+escapeLabel(t.Database)+`:`+t.SchemaName+` {id: $pid}), (cnode:lineage:grafana {id: $cid})
 		CREATE (pnode)-[e:DownStream {udt: timestamp()}]->(cnode)
 		RETURN e
 	`, map[string]interface{}{
 		"pid": fmt.Sprintf("%s.%s.%s", t.Database, t.SchemaName, t.RelName),
-		"cid": fmt.Sprintf("%d:%d", d.Dashboard.ID, p.ID),
+		"cid": fmt.Sprintf("%s>%d>%d", s, d.Dashboard.ID, p.ID),
 	})
+
+	if p.Title == "" {
+		p.Title = "Untitled Panel"
+	}
+
+	p.Title = fmt.Sprintf("%s %d-%d", p.Title, d.Dashboard.ID, p.ID)
+
+	log.Debugf(`
+		INSERT INTO manager.data_lineage_relationship(up_node_name, down_node_name, type, attribute, cdt, udt, name, author)
+		VALUES  (
+			'postgresql:` + fmt.Sprintf("%s:%s.%s", t.Database, t.SchemaName, t.RelName) + `', 
+			'grafana:` + fmt.Sprintf("%s:%s>%s>%s", s, d.Meta.FolderTitle, d.Dashboard.Title, p.Title) + `', 
+			'data_logic', '{}', now(), now(), '', 'ITC180012')
+	`)
 
 	return err
 }

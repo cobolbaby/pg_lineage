@@ -82,3 +82,7 @@ func GetUDFDefinition(db *sql.DB, udf *Udf) (string, error) {
 
 	return definition, nil
 }
+
+func escapeLabel(label string) string {
+	return "`" + label + "`"
+}
