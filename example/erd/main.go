@@ -5,11 +5,12 @@ import (
 	"os"
 
 	"pg_lineage/internal/erd"
+	"pg_lineage/pkg/config"
 	"pg_lineage/pkg/log"
 )
 
 func init() {
-	if err := log.InitLogger(&log.LoggerConfig{
+	if err := log.InitLogger(&config.LogConfig{
 		Level: "debug",
 		Path:  "./logs/lineage.log",
 	}); err != nil {

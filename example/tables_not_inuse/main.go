@@ -43,7 +43,7 @@ func main() {
 	uniqueKeys := make(map[string]bool)
 
 	// A slice to hold all node properties
-	var nodes []map[string]interface{}
+	var nodes []map[string]any
 
 	// Iterate over the result set
 	for result.Next() {

@@ -4,50 +4,50 @@ import (
 	"fmt"
 	"strings"
 
-	"pg_lineage/internal/lineage"
+	"pg_lineage/internal/service"
 	"pg_lineage/pkg/depgraph"
 )
 
 func main() {
 	g := depgraph.New()
 
-	r1 := &lineage.Table{
+	r1 := &service.Table{
 		SchemaName:     "public",
 		RelName:        "test_table",
 		RelPersistence: "p",
 		ID:             "public.test_table",
 	}
-	r2 := &lineage.Table{
+	r2 := &service.Table{
 		SchemaName:     "public",
 		RelName:        "test_table2",
 		RelPersistence: "p",
 		ID:             "public.test_table2",
 	}
-	r3 := &lineage.Table{
+	r3 := &service.Table{
 		SchemaName:     "",
 		RelName:        "temp_test_table3",
 		RelPersistence: "t",
 		ID:             "temp_test_table3",
 	}
-	r4 := &lineage.Table{
+	r4 := &service.Table{
 		SchemaName:     "",
 		RelName:        "temp_test_table4",
 		RelPersistence: "t",
 		ID:             "temp_test_table4",
 	}
-	r5 := &lineage.Table{
+	r5 := &service.Table{
 		SchemaName:     "dw",
 		RelName:        "test_table5",
 		RelPersistence: "t",
 		ID:             "dw.test_table5",
 	}
-	r6 := &lineage.Table{
+	r6 := &service.Table{
 		SchemaName:     "dw",
 		RelName:        "test_table6",
 		RelPersistence: "p",
 		ID:             "dw.test_table6",
 	}
-	r7 := &lineage.Table{
+	r7 := &service.Table{
 		SchemaName:     "dw",
 		RelName:        "test_table7",
 		RelPersistence: "p",

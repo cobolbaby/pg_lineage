@@ -11,6 +11,8 @@ import (
 	"sync"
 
 	"pg_lineage/internal/lineage"
+	writer "pg_lineage/internal/lineage-writer"
+	"pg_lineage/internal/service"
 	C "pg_lineage/pkg/config"
 	"pg_lineage/pkg/depgraph"
 	"pg_lineage/pkg/log"
@@ -20,17 +22,17 @@ import (
 	grafanasearch "github.com/grafana/grafana-openapi-client-go/client/search"
 	"github.com/grafana/grafana-openapi-client-go/models"
 	_ "github.com/lib/pq"
-	"github.com/neo4j/neo4j-go-driver/v4/neo4j"
 )
 
 type DataSourceCache struct {
-	cache map[string]*models.DataSource
-	mu    sync.Mutex
+	ds   map[string]*models.DataSource
+	mu   sync.Mutex
+	rule *regexp.Regexp
 }
 
 var (
-	dsMatchRule *regexp.Regexp
-	config      C.Config
+	config  C.Config
+	dsCache *DataSourceCache
 )
 
 func init() {
@@ -46,40 +48,60 @@ func init() {
 		fmt.Println(err)
 		os.Exit(1)
 	}
-	dsMatchRule = regexp.MustCompile(config.Grafana.DataSourceMatchRules)
+
+	dsCache = &DataSourceCache{
+		ds:   make(map[string]*models.DataSource),
+		rule: regexp.MustCompile(config.Service.Grafana.DsMatchRules),
+	}
 }
 
 func main() {
-	client, err := initGrafanaClient()
+
+	neo4jDriver, err := writer.InitNeo4jDriver(&config.Storage.Neo4j)
+	if err != nil {
+		log.Error(err)
+	}
+	if neo4jDriver != nil {
+		defer neo4jDriver.Close()
+	}
+
+	pgDriver, err := writer.InitPGClient(&config.Storage.Postgres)
+	if err != nil {
+		log.Error(err)
+	}
+	if pgDriver != nil {
+		defer pgDriver.Close()
+	}
+
+	wm := writer.InitWriterManager(&writer.WriterContext{
+		Neo4jDriver: neo4jDriver, // 或 nil
+		PgDriver:    pgDriver,    // 或 nil
+	})
+
+	grafanaSvc, err := initGrafanaClient(&config.Service.Grafana)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	neo4jDriver, err := initNeo4jDriver()
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer neo4jDriver.Close()
-
-	db, err := sql.Open("postgres", config.Postgres.DSN)
+	pgSvc, err := writer.InitPGClient(&config.Service.Postgres)
 	if err != nil {
 		log.Fatal("sql.Open err: ", err)
 	}
-	defer db.Close()
+	defer pgSvc.Close()
 
-	err = processDashboards(client, neo4jDriver, db)
+	err = processDashboards(grafanaSvc, pgSvc, wm)
 	if err != nil {
 		log.Fatal(err)
 	}
 }
 
-func initGrafanaClient() (*grafanaclient.GrafanaHTTPAPI, error) {
+func initGrafanaClient(c *C.GrafanaService) (*grafanaclient.GrafanaHTTPAPI, error) {
 	grafanaCfg := &grafanaclient.TransportConfig{
-		Host:             config.Grafana.Host,
+		Host:             c.Host,
 		BasePath:         "/api",
 		Schemes:          []string{"https"},
-		BasicAuth:        url.UserPassword(config.Grafana.User, config.Grafana.Password),
-		OrgID:            config.Grafana.OrgID,
+		BasicAuth:        url.UserPassword(c.User, c.Password),
+		OrgID:            c.OrgID,
 		NumRetries:       3,
 		RetryStatusCodes: []string{"420", "5xx"},
 		HTTPHeaders:      map[string]string{},
@@ -89,21 +111,23 @@ func initGrafanaClient() (*grafanaclient.GrafanaHTTPAPI, error) {
 	return grafanaclient.NewHTTPClientWithConfig(strfmt.Default, grafanaCfg), nil
 }
 
-func initNeo4jDriver() (neo4j.Driver, error) {
-	return neo4j.NewDriver(config.Neo4j.URL, neo4j.BasicAuth(config.Neo4j.User, config.Neo4j.Password, ""))
-}
-
-func processDashboards(client *grafanaclient.GrafanaHTTPAPI, neo4jDriver neo4j.Driver, db *sql.DB) error {
+func processDashboards(client *grafanaclient.GrafanaHTTPAPI, db *sql.DB, m *writer.WriterManager) error {
 	typeVar := "dash-db"
 	pageVar := int64(1)
 	limitVar := int64(100)
-
-	dsCache := &DataSourceCache{
-		cache: make(map[string]*models.DataSource),
-	}
+	dashIds := config.Service.Grafana.DashboardIDs
 
 	for {
-		params := grafanasearch.NewSearchParams().WithType(&typeVar).WithPage(&pageVar).WithLimit(&limitVar)
+		params := grafanasearch.NewSearchParams().
+			WithType(&typeVar).
+			WithPage(&pageVar).
+			WithLimit(&limitVar)
+
+		// fix: Grafana 8.x 版本还不支持 Uid 检索
+		if len(dashIds) > 0 {
+			params = params.WithDashboardIds(dashIds)
+		}
+
 		dashboards, err := client.Search.Search(params)
 		if err != nil {
 			return fmt.Errorf("error searching dashboards: %v", err)
@@ -114,7 +138,7 @@ func processDashboards(client *grafanaclient.GrafanaHTTPAPI, neo4jDriver neo4j.D
 		}
 
 		for _, dashboardItem := range dashboards.Payload {
-			err := processDashboardItem(client, neo4jDriver, db, dashboardItem, dsCache)
+			err := processDashboardItem(client, db, m, dashboardItem)
 			if err != nil {
 				log.Errorf("Error processing dashboard item: %v", err)
 			}
@@ -126,13 +150,13 @@ func processDashboards(client *grafanaclient.GrafanaHTTPAPI, neo4jDriver neo4j.D
 	return nil
 }
 
-func processDashboardItem(client *grafanaclient.GrafanaHTTPAPI, neo4jDriver neo4j.Driver, db *sql.DB, dashboardItem *models.Hit, cache *DataSourceCache) error {
+func processDashboardItem(client *grafanaclient.GrafanaHTTPAPI, db *sql.DB, m *writer.WriterManager, dashboardItem *models.Hit) error {
 	dashboardFullWithMeta, err := client.Dashboards.GetDashboardByUID(dashboardItem.UID)
 	if err != nil {
 		return fmt.Errorf("error getting dashboard by UID: %v", err)
 	}
 
-	var dashboard *lineage.DashboardFullWithMeta
+	var dashboard *service.DashboardFullWithMeta
 	dashboardJSON, err := json.Marshal(dashboardFullWithMeta.Payload)
 	if err != nil {
 		return fmt.Errorf("error marshalling dashboard JSON: %v", err)
@@ -152,25 +176,36 @@ func processDashboardItem(client *grafanaclient.GrafanaHTTPAPI, neo4jDriver neo4
 
 		switch ds := panel.Datasource.(type) {
 		case string:
-			datasource, err = getDatasourceByName(client, cache, ds)
+			datasource, err = getDatasourceByName(client, ds)
 		case map[string]any:
-			datasource, err = getDatasourceByObject(client, cache, ds)
+			datasource, err = getDatasourceByObject(client, ds)
 		default:
 			log.Errorf("Unknown datasource type: %T", panel.Datasource)
 			continue
 		}
 
 		if err != nil {
+			// TODO:支持数据源是变量类型, 以及混合数据源
 			log.Errorf("Error getting datasource %s: %v", panel.Datasource, err)
 			continue
 		}
 
 		log.Debugf("Datasource Name: %s, Datasource Type: %s, Datasource Database: %s", datasource.Name, datasource.Type, datasource.Database)
 
-		if datasource.Type != "postgres" || datasource.Database != "bdc" {
+		// 非 PG 数据源只记录点
+		if datasource.Type != "postgres" {
+			var dependencies []*service.Table
+
+			if err := m.CreateGraphGrafana(
+				panel, dashboard, config.Service.Grafana, dependencies, config.Service.Postgres); err != nil {
+				log.Errorf("Error creating panel graph: %v", err)
+			}
+
 			continue
 		}
-		if !dsMatchRule.MatchString(datasource.URL) {
+
+		// 匹配特定数据源
+		if !dsCache.rule.MatchString(datasource.URL) {
 			continue
 		}
 
@@ -182,23 +217,20 @@ func processDashboardItem(client *grafanaclient.GrafanaHTTPAPI, neo4jDriver neo4
 			continue
 		}
 
-		if len(dependencies) > 0 {
-			if err := lineage.CreatePanelGraph(
-				neo4jDriver.NewSession(neo4j.SessionConfig{}),
-				panel, dashboard, config.Grafana.Host, dependencies); err != nil {
-				log.Errorf("Error creating panel graph: %v", err)
-			}
+		if err := m.CreateGraphGrafana(
+			panel, dashboard, config.Service.Grafana, dependencies, config.Service.Postgres); err != nil {
+			log.Errorf("Error creating panel graph: %v", err)
 		}
 	}
 
 	return nil
 }
 
-func getDatasourceByName(client *grafanaclient.GrafanaHTTPAPI, cache *DataSourceCache, name string) (*models.DataSource, error) {
-	cache.mu.Lock()
-	defer cache.mu.Unlock()
+func getDatasourceByName(client *grafanaclient.GrafanaHTTPAPI, name string) (*models.DataSource, error) {
+	dsCache.mu.Lock()
+	defer dsCache.mu.Unlock()
 
-	if cachedDatasource, found := cache.cache[name]; found {
+	if cachedDatasource, found := dsCache.ds[name]; found {
 		return cachedDatasource, nil
 	}
 
@@ -206,12 +238,12 @@ func getDatasourceByName(client *grafanaclient.GrafanaHTTPAPI, cache *DataSource
 	if err != nil {
 		return nil, err
 	}
-	cache.cache[name] = ds.Payload
+	dsCache.ds[name] = ds.Payload
 
 	return ds.Payload, nil
 }
 
-func getDatasourceByObject(client *grafanaclient.GrafanaHTTPAPI, cache *DataSourceCache, input map[string]any) (*models.DataSource, error) {
+func getDatasourceByObject(client *grafanaclient.GrafanaHTTPAPI, input map[string]any) (*models.DataSource, error) {
 	if input["uid"] == nil || input["type"] == nil {
 		return nil, fmt.Errorf("invalid datasource object")
 	}
@@ -221,10 +253,10 @@ func getDatasourceByObject(client *grafanaclient.GrafanaHTTPAPI, cache *DataSour
 		return nil, fmt.Errorf("invalid uid type")
 	}
 
-	cache.mu.Lock()
-	defer cache.mu.Unlock()
+	dsCache.mu.Lock()
+	defer dsCache.mu.Unlock()
 
-	if cachedDatasource, found := cache.cache[uid]; found {
+	if cachedDatasource, found := dsCache.ds[uid]; found {
 		return cachedDatasource, nil
 	}
 
@@ -232,16 +264,16 @@ func getDatasourceByObject(client *grafanaclient.GrafanaHTTPAPI, cache *DataSour
 	if err != nil {
 		return nil, err
 	}
-	cache.cache[uid] = ds.Payload
+	dsCache.ds[uid] = ds.Payload
 
 	return ds.Payload, nil
 }
 
-func getPanelDependencies(panel *lineage.Panel, db *sql.DB) ([]*lineage.Table, error) {
-	var dependencies []*lineage.Table
+func getPanelDependencies(panel *service.Panel, db *sql.DB) ([]*service.Table, error) {
+	var dependencies []*service.Table
 
 	for _, t := range panel.Targets {
-		var r []*lineage.Table
+		var r []*service.Table
 
 		if t.RawSQL != "" {
 			log.Debugf("Panel Datasource: %s, Panel RawSQL: %s", panel.Datasource, t.RawSQL)
@@ -260,10 +292,11 @@ func getPanelDependencies(panel *lineage.Panel, db *sql.DB) ([]*lineage.Table, e
 	return dependencies, nil
 }
 
-func parseRawSQL(rawsql string, db *sql.DB) ([]*lineage.Table, error) {
+func parseRawSQL(rawsql string, db *sql.DB) ([]*service.Table, error) {
 	var sqlTree *depgraph.Graph
 
 	udf, err := lineage.IdentifyFuncCall(rawsql)
+	// TODO:引入 AI for lineage
 	if err == nil {
 		sqlTree, err = lineage.HandleUDF4Lineage(db, udf)
 	} else {
@@ -273,12 +306,18 @@ func parseRawSQL(rawsql string, db *sql.DB) ([]*lineage.Table, error) {
 		return nil, err
 	}
 
-	// TODO:操作得前置
-	sqlTree.SetNamespace(config.Postgres.Alias)
+	sqlTree.SetNamespace(config.Service.Postgres.Label)
 
-	var depTables []*lineage.Table
+	var depTables []*service.Table
 	for _, v := range sqlTree.ShrinkGraph().GetNodes() {
-		if r, ok := v.(*lineage.Table); ok {
+		if r, ok := v.(*service.Table); ok {
+
+			// TODO: Graph 中仍然存在临时节点, Why?
+			if r.SchemaName == "" {
+				log.Warnf("Invalid r.SchemaName: %+v", r)
+				continue
+			}
+
 			r.Database = sqlTree.GetNamespace()
 
 			depTables = append(depTables, r)
