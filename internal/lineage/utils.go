@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"pg_lineage/internal/service"
 	"pg_lineage/pkg/log"
 	"regexp"
 )
@@ -17,11 +18,11 @@ var (
 		LIMIT 1;
 	`
 
-	PG_FuncCallPattern1 = regexp.MustCompile(`(?i)(select|call)\s+(\w+)\.(\w+)\((.*)\)\s*(;)?`)
-	PG_FuncCallPattern2 = regexp.MustCompile(`(?i)select\s+(.*)from\s+(\w+)\.(\w+)\((.*)\)\s*(as\s+(.*))?\s*(;)?`)
+	PG_FuncCallPattern1 = regexp.MustCompile(`(?is)(select|call)\s+(\w+)\.(\w+)\((.*)\)\s*(;)?`)
+	PG_FuncCallPattern2 = regexp.MustCompile(`(?is)select\s+(.*)from\s+(\w+)\.(\w+)\((.*)\)\s*(as\s+(.*))?\s*(;)?`)
 )
 
-func IdentifyFuncCall(sql string) (*Udf, error) {
+func IdentifyFuncCall(sql string) (*service.Udf, error) {
 
 	// 正则匹配，忽略大小写
 	// select dw.func_insert_?()
@@ -29,23 +30,23 @@ func IdentifyFuncCall(sql string) (*Udf, error) {
 	// select * from dw.func_insert_?()
 
 	if r := PG_FuncCallPattern1.FindStringSubmatch(sql); r != nil {
-		// log.Debug("FuncCallPattern1:", r[1], r[2], r[3])
-		return &Udf{
+		log.Debug("FuncCallPattern1:", r[1], r[2], r[3])
+		return &service.Udf{
 			Type:       "plpgsql",
 			SchemaName: r[2],
 			ProcName:   r[3],
 		}, nil
 	}
 	if r := PG_FuncCallPattern2.FindStringSubmatch(sql); r != nil {
-		// log.Debug("FuncCallPattern2:", r[1], r[2], r[3])
-		return &Udf{
+		log.Debug("FuncCallPattern2:", r[1], r[2], r[3])
+		return &service.Udf{
 			Type:       "plpgsql",
 			SchemaName: r[2],
 			ProcName:   r[3],
 		}, nil
 	}
 
-	return &Udf{}, errors.New("not a function call")
+	return &service.Udf{}, errors.New("not a function call")
 }
 
 // 过滤部分关键词
@@ -56,7 +57,7 @@ func FilterUnhandledCommands(content string) string {
 }
 
 // 获取相关定义
-func GetUDFDefinition(db *sql.DB, udf *Udf) (string, error) {
+func GetUDFDefinition(db *sql.DB, udf *service.Udf) (string, error) {
 
 	rows, err := db.Query(fmt.Sprintf(PLPGSQL_GET_FUNC_DEFINITION, udf.SchemaName, udf.ProcName))
 	if err != nil {
@@ -81,8 +82,4 @@ func GetUDFDefinition(db *sql.DB, udf *Udf) (string, error) {
 	}
 
 	return definition, nil
-}
-
-func escapeLabel(label string) string {
-	return "`" + label + "`"
 }

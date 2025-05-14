@@ -3,9 +3,8 @@ package lineage
 import (
 	"database/sql"
 	"fmt"
-	"strings"
-	"time"
 
+	"pg_lineage/internal/service"
 	"pg_lineage/pkg/depgraph"
 	"pg_lineage/pkg/log"
 
@@ -24,86 +23,8 @@ var (
 	}
 )
 
-const (
-	REL_PERSIST     = "p"
-	REL_PERSIST_NOT = "t"
-)
-
-type Owner struct {
-	Username string
-	Nickname string
-	ID       string
-}
-
-type Table struct {
-	ID             string
-	Database       string
-	SchemaName     string
-	RelName        string
-	RelPersistence string
-	RelKind        string
-	Columns        []string
-	Size           int64
-	Owner          *Owner
-	CreateTime     time.Time
-	Tags           []string
-	Calls          int64
-	SeqScan        int64
-	SeqTupRead     int64
-	IdxScan        int64
-	IdxTupFetch    int64
-	Comment        string
-}
-
-func (r *Table) GetID() string {
-	if r.ID != "" {
-		return r.ID
-	}
-
-	if r.SchemaName != "" {
-		return r.SchemaName + "." + r.RelName
-	} else {
-		switch r.RelName {
-		case "pg_namespace", "pg_class", "pg_attribute", "pg_type":
-			r.SchemaName = "pg_catalog"
-			return r.SchemaName + "." + r.RelName
-		default:
-			return r.RelName
-		}
-	}
-}
-
-func (r *Table) IsTemp() bool {
-	return strings.HasPrefix(r.SchemaName, "pg_temp_") || r.RelPersistence == REL_PERSIST_NOT ||
-		r.SchemaName == ""
-}
-
-type Udf struct {
-	ID         string
-	Database   string
-	SchemaName string
-	ProcName   string
-	Type       string
-	SrcID      string
-	DestID     string
-	Owner      *Owner
-	Calls      int64
-	Comment    string
-}
-
-func (o *Udf) GetID() string {
-	if o.ID != "" {
-		return o.ID
-	}
-
-	if o.SchemaName == "" {
-		o.SchemaName = "public"
-	}
-	return o.SchemaName + "." + o.ProcName
-}
-
 // 解析函数调用
-func HandleUDF4Lineage(db *sql.DB, udf *Udf) (*depgraph.Graph, error) {
+func HandleUDF4Lineage(db *sql.DB, udf *service.Udf) (*depgraph.Graph, error) {
 	log.Infof("HandleUDF: %s.%s", udf.SchemaName, udf.ProcName)
 
 	// 排除系统函数的干扰 e.g. select now()
@@ -336,7 +257,7 @@ func parseSQL(sqlTree *depgraph.Graph, sql string) error {
 }
 
 // INSERT / UPDATE / DELETE / CREATE TABLE 单表操作
-func parseRangeVar(node *pg_query.RangeVar) *Table {
+func parseRangeVar(node *pg_query.RangeVar) *service.Table {
 
 	// var alias string
 
@@ -346,7 +267,7 @@ func parseRangeVar(node *pg_query.RangeVar) *Table {
 	// 	alias = node.GetRelname()
 	// }
 
-	return &Table{
+	return &service.Table{
 		RelName:        node.GetRelname(),
 		SchemaName:     node.GetSchemaname(),
 		RelPersistence: node.GetRelpersistence(), // p = permanent table/sequence, u = unlogged table/sequence, t = temporary table/sequence
@@ -359,10 +280,10 @@ func parseRangeVar(node *pg_query.RangeVar) *Table {
 func parseWithClause(wc *pg_query.WithClause, sqlTree *depgraph.Graph) error {
 
 	for _, cte := range wc.GetCtes() {
-		tnode := &Table{
+		tnode := &service.Table{
 			RelName:        cte.GetCommonTableExpr().GetCtename(),
 			SchemaName:     "",
-			RelPersistence: REL_PERSIST_NOT,
+			RelPersistence: service.REL_PERSIST_NOT,
 		}
 		sqlTree.AddNode(tnode)
 
@@ -376,8 +297,8 @@ func parseWithClause(wc *pg_query.WithClause, sqlTree *depgraph.Graph) error {
 }
 
 // FROM Clause
-func parseSelectStmt(ss *pg_query.SelectStmt) []*Table {
-	var records []*Table
+func parseSelectStmt(ss *pg_query.SelectStmt) []*service.Table {
+	var records []*service.Table
 
 	// 如果遇到 UNION，则调用 parseUnionClause 方法
 	if ss.GetOp() == pg_query.SetOperation_SETOP_UNION {
@@ -410,8 +331,8 @@ func parseSelectStmt(ss *pg_query.SelectStmt) []*Table {
 }
 
 // UNION 解析
-func parseUnionClause(ss *pg_query.SelectStmt) []*Table {
-	var records []*Table
+func parseUnionClause(ss *pg_query.SelectStmt) []*service.Table {
+	var records []*service.Table
 
 	if ss.GetOp() != pg_query.SetOperation_SETOP_UNION {
 		return records
@@ -427,8 +348,8 @@ func parseUnionClause(ss *pg_query.SelectStmt) []*Table {
 }
 
 // JOIN Clause
-func parseJoinClause(jc *pg_query.JoinExpr) []*Table {
-	var records []*Table
+func parseJoinClause(jc *pg_query.JoinExpr) []*service.Table {
+	var records []*service.Table
 
 	larg := jc.GetLarg()
 	rarg := jc.GetRarg()
@@ -464,8 +385,8 @@ func parseJoinClause(jc *pg_query.JoinExpr) []*Table {
 }
 
 // 关联删除，关联更新
-func parseUsingClause(uc []*pg_query.Node) []*Table {
-	var records []*Table
+func parseUsingClause(uc []*pg_query.Node) []*service.Table {
+	var records []*service.Table
 
 	for _, r := range uc {
 		// 只关联了一张表
@@ -478,8 +399,8 @@ func parseUsingClause(uc []*pg_query.Node) []*Table {
 }
 
 // TODO:
-func parseWhereClause(wc *pg_query.Node) []*Table {
-	var records []*Table
+func parseWhereClause(wc *pg_query.Node) []*service.Table {
+	var records []*service.Table
 
 	if wc.GetSubLink() != nil {
 		log.Debugf("parseWhereClause: %v", wc.GetSubLink())

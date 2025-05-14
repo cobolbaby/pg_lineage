@@ -8,7 +8,7 @@ import (
 
 func ResetGraph(session neo4j.Session) error {
 
-	_, err := session.WriteTransaction(func(tx neo4j.Transaction) (interface{}, error) {
+	_, err := session.WriteTransaction(func(tx neo4j.Transaction) (any, error) {
 		return tx.Run("MATCH (n:ERD) DETACH DELETE n", nil)
 	})
 
@@ -19,7 +19,7 @@ func CreateGraph(session neo4j.Session, relationShips map[string]*RelationShip) 
 
 	// 点还是relation，边id用key，属性就是RelationShip
 	for k, v := range relationShips {
-		_, err := session.WriteTransaction(func(tx neo4j.Transaction) (interface{}, error) {
+		_, err := session.WriteTransaction(func(tx neo4j.Transaction) (any, error) {
 
 			// 创建点，起点，终点
 			if err := CreateNode(tx, v.SColumn); err != nil {
@@ -51,7 +51,7 @@ func CreateNode(tx neo4j.Transaction, r *Column) error {
 		ON MATCH SET n.udt = timestamp()
 		RETURN n.id
 	`,
-		map[string]interface{}{
+		map[string]any{
 			"id":         r.Schema + "." + r.RelName,
 			"schemaname": r.Schema,
 			"relname":    r.RelName,
@@ -81,7 +81,7 @@ func CreateEdge(tx neo4j.Transaction, id string, r *RelationShip) error {
 		return nil
 	}
 
-	_, err := tx.Run(cypher, map[string]interface{}{
+	_, err := tx.Run(cypher, map[string]any{
 		"id":   id,
 		"sid":  r.SColumn.Schema + "." + r.SColumn.RelName,
 		"tid":  r.TColumn.Schema + "." + r.TColumn.RelName,

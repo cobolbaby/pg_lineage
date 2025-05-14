@@ -4,28 +4,24 @@ import (
 	"errors"
 	"io"
 	"os"
+	"pg_lineage/pkg/config"
 
 	"github.com/natefinch/lumberjack"
 	"github.com/sirupsen/logrus"
 )
 
 type Logger interface {
-	Fatalf(string, ...interface{})
-	Errorf(string, ...interface{})
-	Warningf(string, ...interface{})
-	Warnf(string, ...interface{})
-	Infof(string, ...interface{})
-	Debugf(string, ...interface{})
-	Fatal(...interface{})
-	Error(...interface{})
-	Warn(...interface{})
-	Info(...interface{})
-	Debug(...interface{})
-}
-
-type LoggerConfig struct {
-	Path  string `mapstructure:"path"`
-	Level string `mapstructure:"level"`
+	Fatalf(string, ...any)
+	Errorf(string, ...any)
+	Warningf(string, ...any)
+	Warnf(string, ...any)
+	Infof(string, ...any)
+	Debugf(string, ...any)
+	Fatal(...any)
+	Error(...any)
+	Warn(...any)
+	Info(...any)
+	Debug(...any)
 }
 
 var logger Logger
@@ -34,51 +30,51 @@ func GetLogger() Logger {
 	return logger
 }
 
-func Fatalf(format string, args ...interface{}) {
+func Fatalf(format string, args ...any) {
 	logger.Fatalf(format, args...)
 }
 
-func Errorf(format string, args ...interface{}) {
+func Errorf(format string, args ...any) {
 	logger.Errorf(format, args...)
 }
 
-func Warningf(format string, args ...interface{}) {
+func Warningf(format string, args ...any) {
 	logger.Warningf(format, args...)
 }
 
-func Warnf(format string, args ...interface{}) {
+func Warnf(format string, args ...any) {
 	logger.Warnf(format, args...)
 }
 
-func Infof(format string, args ...interface{}) {
+func Infof(format string, args ...any) {
 	logger.Infof(format, args...)
 }
 
-func Debugf(format string, args ...interface{}) {
+func Debugf(format string, args ...any) {
 	logger.Debugf(format, args...)
 }
 
-func Fatal(args ...interface{}) {
+func Fatal(args ...any) {
 	logger.Fatal(args...)
 }
 
-func Error(args ...interface{}) {
+func Error(args ...any) {
 	logger.Error(args...)
 }
 
-func Warn(args ...interface{}) {
+func Warn(args ...any) {
 	logger.Warn(args...)
 }
 
-func Info(args ...interface{}) {
+func Info(args ...any) {
 	logger.Info(args...)
 }
 
-func Debug(args ...interface{}) {
+func Debug(args ...any) {
 	logger.Debug(args...)
 }
 
-func NewLogger(cfg *LoggerConfig) (Logger, error) {
+func NewLogger(cfg *config.LogConfig) (Logger, error) {
 
 	logrusLogger := logrus.New()
 
@@ -111,7 +107,7 @@ func NewLogger(cfg *LoggerConfig) (Logger, error) {
 	return logrusLogger, nil
 }
 
-func InitLogger(cfg *LoggerConfig) error {
+func InitLogger(cfg *config.LogConfig) error {
 	var err error
 	logger, err = NewLogger(cfg)
 	return err
