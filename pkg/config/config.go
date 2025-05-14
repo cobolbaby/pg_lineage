@@ -2,30 +2,53 @@ package config
 
 import (
 	"fmt"
-	"pg_lineage/pkg/log"
 	"strings"
 
 	"github.com/spf13/viper"
 )
 
 type Config struct {
-	Postgres struct {
-		DSN   string `mapstructure:"dsn"`
-		Alias string `mapstructure:"alias"`
-	} `mapstructure:"postgres"`
-	Neo4j struct {
-		URL      string `mapstructure:"url"`
-		User     string `mapstructure:"user"`
-		Password string `mapstructure:"password"`
-	} `mapstructure:"neo4j"`
-	Log     log.LoggerConfig
-	Grafana struct {
-		Host                 string `mapstructure:"host"`
-		User                 string `mapstructure:"user"`
-		Password             string `mapstructure:"password"`
-		OrgID                int64  `mapstructure:"org_id"`
-		DataSourceMatchRules string `mapstructure:"ds_match_rules"`
-	} `mapstructure:"grafana"`
+	Storage StorageConfig `mapstructure:"storage"` // 用于埋点数据的存储
+	Log     LogConfig     `mapstructure:"log"`
+	Service ServiceConfig `mapstructure:"service"`
+}
+
+type StorageConfig struct {
+	Neo4j    Neo4jService    `mapstructure:"neo4j"`
+	Postgres PostgresService `mapstructure:"postgres"`
+}
+
+type LogConfig struct {
+	Level string `mapstructure:"level"`
+	Path  string `mapstructure:"path"`
+}
+
+type ServiceConfig struct {
+	Postgres PostgresService `mapstructure:"postgres"`
+	Grafana  GrafanaService  `mapstructure:"grafana"`
+}
+
+type Neo4jService struct {
+	URL      string `mapstructure:"url"`
+	User     string `mapstructure:"user"`
+	Password string `mapstructure:"password"`
+}
+
+type PostgresService struct {
+	Zone   string `mapstructure:"zone"`
+	DSN    string `mapstructure:"dsn"`
+	DBName string `mapstructure:"dbname"`
+	Label  string `mapstructure:"label"`
+}
+
+type GrafanaService struct {
+	Zone         string  `mapstructure:"zone"`
+	Host         string  `mapstructure:"host"`
+	User         string  `mapstructure:"user"`
+	Password     string  `mapstructure:"password"`
+	OrgID        int64   `mapstructure:"org_id"`
+	DsMatchRules string  `mapstructure:"ds_match_rules"`
+	DashboardIDs []int64 `mapstructure:"dashids"`
 }
 
 func InitConfig(cfgFile string) (Config, error) {
