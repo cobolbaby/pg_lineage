@@ -24,8 +24,8 @@ type LogConfig struct {
 }
 
 type ServiceConfig struct {
-	Postgres PostgresService `mapstructure:"postgres"`
-	Grafana  GrafanaService  `mapstructure:"grafana"`
+	Postgres []PostgresService `mapstructure:"postgres"`
+	Grafana  GrafanaService    `mapstructure:"grafana"`
 }
 
 type Neo4jService struct {

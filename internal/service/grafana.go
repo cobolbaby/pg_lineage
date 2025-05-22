@@ -11,17 +11,20 @@ type Panel struct {
 	Description string `json:"description,omitempty"`
 	ID          int    `json:"id"`
 	Targets     []struct {
-		Query    string `json:"query"`
-		RawQuery bool   `json:"rawQuery"`
-		RawSQL   string `json:"rawSql"`
+		Datasource any    `json:"datasource"`
+		Query      string `json:"query"`
+		RawQuery   bool   `json:"rawQuery"`
+		RawSQL     string `json:"rawSql"`
 	} `json:"targets,omitempty"`
-	Title string `json:"title"`
-	Type  string `json:"type"`
+	Title     string  `json:"title"`
+	Type      string  `json:"type"`
+	Collapsed bool    `json:"collapsed,omitempty"` // 表示该 panel 是否为折叠组
+	Panels    []Panel `json:"panels,omitempty"`    // 若是折叠组，包含子面板列表
 }
 
 type Dashboard struct {
 	ID         int      `json:"id"`
-	Panels     []*Panel `json:"panels"`
+	Panels     []Panel  `json:"panels"`
 	Tags       []string `json:"tags"`
 	Templating struct {
 		List []struct {
@@ -46,7 +49,7 @@ type DashboardFullWithMeta struct {
 	Dashboard Dashboard `json:"dashboard,omitempty"`
 
 	// meta
-	Meta *models.DashboardMeta `json:"meta,omitempty"`
+	Meta models.DashboardMeta `json:"meta,omitempty"`
 }
 
 func (p *Panel) GetID() string {
