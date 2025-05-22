@@ -16,15 +16,15 @@ type Panel struct {
 		RawQuery   bool   `json:"rawQuery"`
 		RawSQL     string `json:"rawSql"`
 	} `json:"targets,omitempty"`
-	Title     string  `json:"title"`
-	Type      string  `json:"type"`
-	Collapsed bool    `json:"collapsed,omitempty"` // 表示该 panel 是否为折叠组
-	Panels    []Panel `json:"panels,omitempty"`    // 若是折叠组，包含子面板列表
+	Title     string   `json:"title"`
+	Type      string   `json:"type"`
+	Collapsed bool     `json:"collapsed,omitempty"` // 表示该 panel 是否为折叠组
+	Panels    []*Panel `json:"panels,omitempty"`    // 若是折叠组，包含子面板列表
 }
 
 type Dashboard struct {
 	ID         int      `json:"id"`
-	Panels     []Panel  `json:"panels"`
+	Panels     []*Panel `json:"panels"`
 	Tags       []string `json:"tags"`
 	Templating struct {
 		List []struct {

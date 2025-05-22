@@ -52,12 +52,23 @@ type LineageWriter interface {
 	ResetGraph() error
 }
 
+type LineageWriterFunc func(LineageWriter) error
+
 type WriterManager struct {
 	writers []LineageWriter
 	mu      sync.RWMutex
 }
 
-type LineageWriterFunc func(LineageWriter) error
+func (w *WriterManager) Close() {
+	for _, writer := range w.writers {
+		if neo4jWriter, ok := writer.(*Neo4jLineageWriter); ok {
+			neo4jWriter.session.Close()
+		}
+		if pgWriter, ok := writer.(*PGLineageWriter); ok {
+			pgWriter.db.Close()
+		}
+	}
+}
 
 func (w *WriterManager) apply(fn LineageWriterFunc) error {
 	for _, writer := range w.writers {

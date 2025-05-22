@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-	"regexp"
+	"strings"
 	"sync"
 
 	"pg_lineage/internal/lineage"
@@ -22,12 +22,29 @@ import (
 	grafanasearch "github.com/grafana/grafana-openapi-client-go/client/search"
 	"github.com/grafana/grafana-openapi-client-go/models"
 	_ "github.com/lib/pq"
+	"github.com/neo4j/neo4j-go-driver/v4/neo4j"
 )
 
+// ServiceProvider 封装服务依赖
+type ServiceProvider struct {
+	Grafana       GrafanaBundle
+	PG            map[string]*PGBundle
+	WriterManager *writer.WriterManager
+}
+
+type GrafanaBundle struct {
+	Client *grafanaclient.GrafanaHTTPAPI
+	Config *C.GrafanaService
+}
+
+type PGBundle struct {
+	Client *sql.DB
+	Config *C.PostgresService
+}
+
 type DataSourceCache struct {
-	ds   map[string]*models.DataSource
-	mu   sync.Mutex
-	rule *regexp.Regexp
+	ds map[string]*models.DataSource
+	mu sync.Mutex
 }
 
 var (
@@ -50,68 +67,103 @@ func init() {
 	}
 
 	dsCache = &DataSourceCache{
-		ds:   make(map[string]*models.DataSource),
-		rule: regexp.MustCompile(config.Service.Grafana.DsMatchRules),
+		ds: make(map[string]*models.DataSource),
 	}
 }
 
 func main() {
+	// 初始化 WriterManager（内部根据 config.Storage 决定用哪种存储）
+	wm := mustInitWriterManager(&config.Storage)
+	defer wm.Close() // WriterManager 内部封装资源关闭逻辑
 
-	neo4jDriver, err := writer.InitNeo4jDriver(&config.Storage.Neo4j)
-	if err != nil {
-		log.Error(err)
-	}
-	if neo4jDriver != nil {
-		defer neo4jDriver.Close()
-	}
+	// 初始化 Grafana 客户端
+	grafanaClient := mustInitGrafanaClient(&config.Service.Grafana)
 
-	pgDriver, err := writer.InitPGClient(&config.Storage.Postgres)
-	if err != nil {
-		log.Error(err)
-	}
-	if pgDriver != nil {
-		defer pgDriver.Close()
-	}
+	// 初始化所有 PG 客户端并关联配置
+	pgMap := mustInitPGClients(config.Service.Postgres)
+	defer closePGClients(pgMap)
 
-	wm := writer.InitWriterManager(&writer.WriterContext{
-		Neo4jDriver: neo4jDriver, // 或 nil
-		PgDriver:    pgDriver,    // 或 nil
-	})
-
-	grafanaSvc, err := initGrafanaClient(&config.Service.Grafana)
-	if err != nil {
-		log.Fatal(err)
+	// 构造 ServiceProvider，聚合服务资源
+	sp := &ServiceProvider{
+		Grafana: GrafanaBundle{
+			Client: grafanaClient,
+			Config: &config.Service.Grafana,
+		},
+		PG:            pgMap,
+		WriterManager: wm,
 	}
 
-	pgSvc, err := writer.InitPGClient(&config.Service.Postgres)
-	if err != nil {
-		log.Fatal("sql.Open err: ", err)
-	}
-	defer pgSvc.Close()
-
-	err = processDashboards(grafanaSvc, pgSvc, wm)
-	if err != nil {
+	// 核心处理
+	if err := processDashboards(sp); err != nil {
 		log.Fatal(err)
 	}
 }
 
-func initGrafanaClient(c *C.GrafanaService) (*grafanaclient.GrafanaHTTPAPI, error) {
+func mustInitWriterManager(cfg *C.StorageConfig) *writer.WriterManager {
+	var neo4jDriver neo4j.Driver
+	var pgDriver *sql.DB
+	var err error
+
+	if cfg.Neo4j.Enabled {
+		neo4jDriver, err = writer.InitNeo4jDriver(&cfg.Neo4j)
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
+
+	if cfg.Postgres.Enabled {
+		pgDriver, err = writer.InitPGClient(&cfg.Postgres)
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
+
+	return writer.InitWriterManager(&writer.WriterContext{
+		Neo4jDriver: neo4jDriver,
+		PgDriver:    pgDriver,
+	})
+}
+
+func mustInitGrafanaClient(cfg *C.GrafanaService) *grafanaclient.GrafanaHTTPAPI {
 	grafanaCfg := &grafanaclient.TransportConfig{
-		Host:             c.Host,
+		Host:             cfg.Host,
 		BasePath:         "/api",
 		Schemes:          []string{"https"},
-		BasicAuth:        url.UserPassword(c.User, c.Password),
-		OrgID:            c.OrgID,
+		BasicAuth:        url.UserPassword(cfg.User, cfg.Password),
+		OrgID:            cfg.OrgID,
 		NumRetries:       3,
 		RetryStatusCodes: []string{"420", "5xx"},
 		HTTPHeaders:      map[string]string{},
 		// Debug:            true,
 	}
 
-	return grafanaclient.NewHTTPClientWithConfig(strfmt.Default, grafanaCfg), nil
+	return grafanaclient.NewHTTPClientWithConfig(strfmt.Default, grafanaCfg)
 }
 
-func processDashboards(client *grafanaclient.GrafanaHTTPAPI, db *sql.DB, m *writer.WriterManager) error {
+func mustInitPGClients(pgConfigs []C.PostgresService) map[string]*PGBundle {
+	pgMap := make(map[string]*PGBundle)
+	for _, pgConf := range pgConfigs {
+		db, err := writer.InitPGClient(&pgConf)
+		if err != nil {
+			log.Fatalf("failed to init pg client for label %s: %v", pgConf.Label, err)
+		}
+		pgMap[pgConf.Label] = &PGBundle{
+			Client: db,
+			Config: &pgConf,
+		}
+	}
+	return pgMap
+}
+
+func closePGClients(pgMap map[string]*PGBundle) {
+	for label, pg := range pgMap {
+		if err := pg.Client.Close(); err != nil {
+			log.Warnf("failed to close PG client for %s: %v", label, err)
+		}
+	}
+}
+
+func processDashboards(sp *ServiceProvider) error {
 	typeVar := "dash-db"
 	pageVar := int64(1)
 	limitVar := int64(100)
@@ -128,7 +180,7 @@ func processDashboards(client *grafanaclient.GrafanaHTTPAPI, db *sql.DB, m *writ
 			params = params.WithDashboardIds(dashIds)
 		}
 
-		dashboards, err := client.Search.Search(params)
+		dashboards, err := sp.Grafana.Client.Search.Search(params)
 		if err != nil {
 			return fmt.Errorf("error searching dashboards: %v", err)
 		}
@@ -138,7 +190,7 @@ func processDashboards(client *grafanaclient.GrafanaHTTPAPI, db *sql.DB, m *writ
 		}
 
 		for _, dashboardItem := range dashboards.Payload {
-			err := processDashboardItem(client, db, m, dashboardItem)
+			err := processDashboardItem(sp, dashboardItem)
 			if err != nil {
 				log.Errorf("Error processing dashboard item: %v", err)
 			}
@@ -150,8 +202,8 @@ func processDashboards(client *grafanaclient.GrafanaHTTPAPI, db *sql.DB, m *writ
 	return nil
 }
 
-func processDashboardItem(client *grafanaclient.GrafanaHTTPAPI, db *sql.DB, m *writer.WriterManager, dashboardItem *models.Hit) error {
-	dashboardFullWithMeta, err := client.Dashboards.GetDashboardByUID(dashboardItem.UID)
+func processDashboardItem(sp *ServiceProvider, dashboardItem *models.Hit) error {
+	dashboardFullWithMeta, err := sp.Grafana.Client.Dashboards.GetDashboardByUID(dashboardItem.UID)
 	if err != nil {
 		return fmt.Errorf("error getting dashboard by UID: %v", err)
 	}
@@ -161,69 +213,97 @@ func processDashboardItem(client *grafanaclient.GrafanaHTTPAPI, db *sql.DB, m *w
 	if err != nil {
 		return fmt.Errorf("error marshalling dashboard JSON: %v", err)
 	}
-
 	if err = json.Unmarshal(dashboardJSON, &dashboard); err != nil {
 		return fmt.Errorf("error unmarshalling dashboard JSON: %v", err)
 	}
 
-	log.Debugf("Dashboard Title: %s", dashboard.Dashboard.Title)
 	for _, panel := range dashboard.Dashboard.Panels {
-		if panel.Datasource == nil {
-			continue
-		}
-
-		var datasource *models.DataSource
-
-		switch ds := panel.Datasource.(type) {
-		case string:
-			datasource, err = getDatasourceByName(client, ds)
-		case map[string]any:
-			datasource, err = getDatasourceByObject(client, ds)
-		default:
-			log.Errorf("Unknown datasource type: %T", panel.Datasource)
-			continue
-		}
-
-		if err != nil {
-			// TODO:支持数据源是变量类型, 以及混合数据源
-			log.Errorf("Error getting datasource %s: %v", panel.Datasource, err)
-			continue
-		}
-
-		log.Debugf("Datasource Name: %s, Datasource Type: %s, Datasource Database: %s", datasource.Name, datasource.Type, datasource.Database)
-
-		// 非 PG 数据源只记录点
-		if datasource.Type != "postgres" {
-			var dependencies []*service.Table
-
-			if err := m.CreateGraphGrafana(
-				panel, dashboard, config.Service.Grafana, dependencies, config.Service.Postgres); err != nil {
-				log.Errorf("Error creating panel graph: %v", err)
-			}
-
-			continue
-		}
-
-		// 匹配特定数据源
-		if !dsCache.rule.MatchString(datasource.URL) {
-			continue
-		}
-
-		log.Debugf("Panel ID: %d, Panel Type: %s, Panel Title: %s", panel.ID, panel.Type, panel.Title)
-
-		dependencies, err := getPanelDependencies(panel, db)
-		if err != nil {
-			log.Errorf("Error getting panel dependencies: %v", err)
-			continue
-		}
-
-		if err := m.CreateGraphGrafana(
-			panel, dashboard, config.Service.Grafana, dependencies, config.Service.Postgres); err != nil {
-			log.Errorf("Error creating panel graph: %v", err)
-		}
+		processPanelRecursive(sp, dashboard, panel)
 	}
 
 	return nil
+}
+
+func processPanelRecursive(sp *ServiceProvider, dashboard *service.DashboardFullWithMeta, panel *service.Panel) {
+	if panel.Collapsed && len(panel.Panels) > 0 {
+		for _, child := range panel.Panels {
+			processPanelRecursive(sp, dashboard, child)
+		}
+		return
+	}
+
+	// 没有数据源的 Panel 直接跳过
+	if panel.Datasource == nil {
+		return
+	}
+
+	// 格式化 panel.Title
+	if panel.Title == "" {
+		panel.Title = "Untitled Panel"
+	}
+	panel.Title = fmt.Sprintf("%s %d-%d", panel.Title, dashboard.Dashboard.ID, panel.ID)
+
+	// // 处理 Mixed 模式
+	// if isMixedDatasource(panel.Datasource) {
+	// 	log.Debugf("Panel %d uses mixed datasource", panel.ID)
+	// 	for _, target := range panel.Targets {
+	// 		dsObj := target.Datasource
+	// 		if dsObj == nil {
+	// 			continue
+	// 		}
+	// 		datasource, err := resolveDatasource(sp.GrafanaClient, dsObj)
+	// 		if err != nil {
+	// 			log.Errorf("Error resolving mixed datasource: %v", err)
+	// 			continue
+	// 		}
+
+	// 		processDatasourceForPanel(sp, panel, dashboard, datasource)
+	// 	}
+	// 	return
+	// }
+
+	// // 普通模式
+	// datasource, err := resolveDatasource(sp.GrafanaClient, panel.Datasource)
+	// if err != nil {
+	// 	log.Errorf("Error resolving datasource: %v", err)
+	// 	return
+	// }
+
+	processDatasourceForPanel(sp, panel, dashboard)
+}
+
+// func isMixedDatasource(ds any) bool {
+// 	m, ok := ds.(map[string]any)
+// 	return ok && m["uid"] == "-- Mixed --"
+// }
+
+func processDatasourceForPanel(sp *ServiceProvider, panel *service.Panel, dashboard *service.DashboardFullWithMeta) {
+	// 获取 panel 所依赖的数据源及表信息
+	depMap, err := getPanelDependencies(sp, panel)
+	if err != nil {
+		log.Errorf("Error getting dependencies for panel %d: %v", panel.ID, err)
+		return
+	}
+
+	for ds, dependencies := range depMap {
+		if err := sp.WriterManager.CreateGraphGrafana(panel, dashboard, *sp.Grafana.Config, dependencies, *ds); err != nil {
+			log.Errorf("Error creating graph for panel %d: %v", panel.ID, err)
+		}
+	}
+}
+
+func resolveDatasource(client *grafanaclient.GrafanaHTTPAPI, ds any) (*models.DataSource, error) {
+	switch v := ds.(type) {
+	case string:
+		if strings.HasPrefix(v, "$") {
+			return nil, fmt.Errorf("template variable %s not resolved", v)
+		}
+		return getDatasourceByName(client, v)
+	case map[string]any:
+		return getDatasourceByObject(client, v)
+	default:
+		return nil, fmt.Errorf("unknown datasource type: %T", ds)
+	}
 }
 
 func getDatasourceByName(client *grafanaclient.GrafanaHTTPAPI, name string) (*models.DataSource, error) {
@@ -244,9 +324,6 @@ func getDatasourceByName(client *grafanaclient.GrafanaHTTPAPI, name string) (*mo
 }
 
 func getDatasourceByObject(client *grafanaclient.GrafanaHTTPAPI, input map[string]any) (*models.DataSource, error) {
-	if input["uid"] == nil || input["type"] == nil {
-		return nil, fmt.Errorf("invalid datasource object")
-	}
 
 	uid, ok := input["uid"].(string)
 	if !ok {
@@ -269,36 +346,51 @@ func getDatasourceByObject(client *grafanaclient.GrafanaHTTPAPI, input map[strin
 	return ds.Payload, nil
 }
 
-func getPanelDependencies(panel *service.Panel, db *sql.DB) ([]*service.Table, error) {
-	var dependencies []*service.Table
+func getPanelDependencies(sp *ServiceProvider, panel *service.Panel) (map[*C.PostgresService][]*service.Table, error) {
+	result := make(map[*C.PostgresService][]*service.Table)
 
 	for _, t := range panel.Targets {
-		var r []*service.Table
+		dsResolved, err := resolveDatasource(sp.Grafana.Client, t.Datasource)
+		if err != nil {
+			log.Warnf("Skipping unresolved datasource: %v", err)
+			continue
+		}
+
+		// 只处理 Postgres 数据源
+		if dsResolved.Type != "postgres" {
+			log.Debugf("Datasource %s is not postgres, skipping", dsResolved.Name)
+			continue
+		}
+
+		pgBundle, ok := sp.PG[dsResolved.Name]
+		if !ok || pgBundle.Client == nil {
+			log.Warnf("Datasource %s not found in PG clients", dsResolved.Name)
+			continue
+		}
+
+		var tables []*service.Table
 
 		if t.RawSQL != "" {
-			log.Debugf("Panel Datasource: %s, Panel RawSQL: %s", panel.Datasource, t.RawSQL)
-			r, _ = parseRawSQL(t.RawSQL, db)
-		}
-		if t.Query != "" {
-			log.Debugf("Panel Datasource: %s, Panel Query: %s", panel.Datasource, t.Query)
-			r, _ = parseRawSQL(t.Query, db)
+			tables, _ = parseRawSQL(t.RawSQL, pgBundle)
+		} else if t.Query != "" { // 哪个插件用该 字段?
+			tables, _ = parseRawSQL(t.Query, pgBundle)
 		}
 
-		if len(r) > 0 {
-			dependencies = append(dependencies, r...)
+		if len(tables) > 0 {
+			result[pgBundle.Config] = append(result[pgBundle.Config], tables...)
 		}
 	}
 
-	return dependencies, nil
+	return result, nil
 }
 
-func parseRawSQL(rawsql string, db *sql.DB) ([]*service.Table, error) {
+func parseRawSQL(rawsql string, pgBundle *PGBundle) ([]*service.Table, error) {
 	var sqlTree *depgraph.Graph
 
 	udf, err := lineage.IdentifyFuncCall(rawsql)
 	// TODO:引入 AI for lineage
 	if err == nil {
-		sqlTree, err = lineage.HandleUDF4Lineage(db, udf)
+		sqlTree, err = lineage.HandleUDF4Lineage(pgBundle.Client, udf)
 	} else {
 		sqlTree, err = lineage.Parse(rawsql)
 	}
@@ -306,7 +398,7 @@ func parseRawSQL(rawsql string, db *sql.DB) ([]*service.Table, error) {
 		return nil, err
 	}
 
-	sqlTree.SetNamespace(config.Service.Postgres.Label)
+	sqlTree.SetNamespace(pgBundle.Config.Label)
 
 	var depTables []*service.Table
 	for _, v := range sqlTree.ShrinkGraph().GetNodes() {

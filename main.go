@@ -7,21 +7,15 @@ import (
 	"os"
 	"strings"
 
+	_ "github.com/lib/pq"
+
 	"pg_lineage/internal/lineage"
 	writer "pg_lineage/internal/lineage-writer"
 	"pg_lineage/internal/service"
 	C "pg_lineage/pkg/config"
 	"pg_lineage/pkg/depgraph"
 	"pg_lineage/pkg/log"
-
-	_ "github.com/lib/pq"
 )
-
-type DataSource struct {
-	Label  string
-	DBName string
-	DB     *sql.DB
-}
 
 type QueryStore struct {
 	Query     string
@@ -32,21 +26,6 @@ type QueryStore struct {
 	MeanTime  float64
 }
 
-var PG_QUERY_STORE = `
-	SELECT 
-		s.query, s.calls, s.total_time, s.min_time, s.max_time, s.mean_time
-	FROM 
-		pg_stat_statements s
-	JOIN
-		pg_database d ON d.oid = s.dbid
-	WHERE
-		d.datname = '%s'
-		AND calls > 10
-	ORDER BY
-		s.mean_time DESC
-	Limit 1000;
-`
-
 var config C.Config
 
 func init() {
@@ -55,214 +34,173 @@ func init() {
 
 	var err error
 	if config, err = C.InitConfig(*configFile); err != nil {
-		fmt.Println("InitConfig err: ", err)
+		fmt.Println("InitConfig error:", err)
 		os.Exit(1)
 	}
-	if err = log.InitLogger(&config.Log); err != nil {
-		fmt.Println(err)
+	if err := log.InitLogger(&config.Log); err != nil {
+		fmt.Println("InitLogger error:", err)
 		os.Exit(1)
 	}
 }
 
 func main() {
-	log.Infof("log level: %s, log file: %s", config.Log.Level, config.Log.Path)
+	log.Infof("Log level: %s, log file: %s", config.Log.Level, config.Log.Path)
 
 	neo4jDriver, err := writer.InitNeo4jDriver(&config.Storage.Neo4j)
 	if err != nil {
-		log.Error(err)
+		log.Fatalf("InitNeo4jDriver error: %v", err)
 	}
-	if neo4jDriver != nil {
-		defer neo4jDriver.Close()
-	}
+	defer safeClose("neo4j", neo4jDriver)
 
-	pgDriver, err := writer.InitPGClient(&config.Storage.Postgres)
+	pgWriterDriver, err := writer.InitPGClient(&config.Storage.Postgres)
 	if err != nil {
-		log.Error(err)
+		log.Fatalf("InitPostgresWriter error: %v", err)
 	}
-	if pgDriver != nil {
-		defer pgDriver.Close()
-	}
+	defer safeClose("postgres writer", pgWriterDriver)
 
-	wm := writer.InitWriterManager(&writer.WriterContext{
-		Neo4jDriver: neo4jDriver, // 或 nil
-		PgDriver:    pgDriver,
+	writerManager := writer.InitWriterManager(&writer.WriterContext{
+		Neo4jDriver: neo4jDriver,
+		PgDriver:    pgWriterDriver,
 	})
 
-	// 每次都是重建整张图，避免重复写入，后期可以考虑优化
-	if err := wm.ResetGraph(); err != nil {
-		log.Fatal("ResetGraph err: ", err)
+	if err := writerManager.ResetGraph(); err != nil {
+		log.Fatalf("ResetGraph error: %v", err)
 	}
 
-	// Sessions are short-lived, cheap to create and NOT thread safe. Typically create one or more sessions
-	// per request in your web application. Make sure to call Close on the session when done.
-	// For multi-database support, set sessionConfig.DatabaseName to requested database
-	// Session config will default to write mode, if only reads are to be used configure session for
-	// read mode.
-	// session := driver.NewSession(neo4j.SessionConfig{})
-	// defer session.Close()
-
-	// if err := erd.ResetGraph(session); err != nil {
-	// 	log.Fatal("ResetGraph err: ", err)
-	// }
-
-	db, err := writer.InitPGClient(&config.Service.Postgres)
-	if err != nil {
-		log.Fatal(err)
+	for _, dsConf := range config.Service.Postgres {
+		processDataSource(dsConf, writerManager)
 	}
-	defer db.Close()
-
-	ds := &DataSource{
-		Label:  config.Service.Postgres.Label,
-		DBName: config.Service.Postgres.DBName,
-		DB:     db,
-	}
-
-	// 支持获取pg_stat_statements中的sql语句
-	querys, err := ds.DB.Query(fmt.Sprintf(PG_QUERY_STORE, ds.DBName))
-	if err != nil {
-		log.Fatal("db.Query err: ", err)
-	}
-	defer querys.Close()
-
-	// m := make(map[string]*erd.RelationShip)
-
-	for querys.Next() {
-
-		var qs QueryStore
-		_ = querys.Scan(&qs.Query, &qs.Calls, &qs.TotalTime, &qs.MinTime, &qs.MaxTime, &qs.MeanTime)
-
-		// 生成血缘图
-		// 一个 udf 会生成一颗 sqlTree，且不能将多个 udf 的 sqlTree 做合并，所以需要循环写入所有的 sqlTree
-		generateTableLineage(&qs, ds, wm)
-
-		// 为了避免重复插入，写入前依赖 MAP 特性做一次去重，并且最后一次性入库
-		// r := generateTableJoinRelation(&qs, ds, session)
-		// maps.Copy(m, r)
-
-		// 扩展别的图.
-	}
-
-	// 一次性入库...
-	// if err := erd.CreateGraph(session, m); err != nil {
-	// 	log.Errorf("ERD err: %s ", err)
-	// }
-
-	// 查询所有表的使用信息，更新图数据库中的节点信息
-	completeLineageGraph(ds, wm)
-
 }
 
-// // 生成一张 JOIN 图
-// // 可以推导出关联关系的有 IN / JOIN
-// func generateTableJoinRelation(qs *QueryStore, ds *DataSource, session neo4j.Session) map[string]*erd.RelationShip {
-// 	log.Debugf("generateTableJoinRelation sql: %s", qs.Query)
+func processDataSource(conf C.PostgresService, wm *writer.WriterManager) {
+	log.Infof("Processing data source: %s", conf.Label)
 
-// 	var m map[string]*erd.RelationShip
+	db, err := writer.InitPGClient(&conf)
+	if err != nil {
+		log.Errorf("Failed to connect to data source %s: %v", conf.Label, err)
+		return
+	}
+	defer safeClose(conf.Label, db)
 
-// 	if udf, err := lineage.IdentifyFuncCall(qs.Query); err == nil {
-// 		m, _ = erd.HandleUDF4ERD(ds.DB, udf)
-// 	} else {
-// 		m, _ = erd.Parse(qs.Query)
-// 	}
+	queries, err := fetchQueryStats(db, conf.DBName)
+	if err != nil {
+		log.Errorf("Error fetching query stats for %s: %v", conf.Label, err)
+		return
+	}
+	defer queries.Close()
 
-// 	n := make(map[string]*erd.RelationShip)
-// 	for kk, vv := range m {
-// 		// 过滤掉临时表
-// 		if vv.SColumn == nil || vv.TColumn == nil || vv.SColumn.Schema == "" || vv.TColumn.Schema == "" {
-// 			continue
-// 		}
-// 		n[kk] = vv
-// 	}
-// 	fmt.Printf("GetRelationShip: #%d\n", len(n))
-// 	for _, v := range n {
-// 		fmt.Printf("%s\n", v.ToString())
-// 	}
+	for queries.Next() {
+		var qs QueryStore
+		if err := queries.Scan(&qs.Query, &qs.Calls, &qs.TotalTime, &qs.MinTime, &qs.MaxTime, &qs.MeanTime); err != nil {
+			log.Warnf("Query row scan error: %v", err)
+			continue
+		}
+		handleQueryLineage(&qs, conf, db, wm)
+	}
 
-// 	return n
-// }
+	if err := completeLineageGraph(conf, db, wm); err != nil {
+		log.Errorf("Complete graph update error for %s: %v", conf.Label, err)
+		return
+	}
+}
 
-// 生成表血缘关系图
-func generateTableLineage(qs *QueryStore, ds *DataSource, m *writer.WriterManager) {
+func fetchQueryStats(db *sql.DB, dbName string) (*sql.Rows, error) {
+	query := fmt.Sprintf(`
+		SELECT 
+			s.query, s.calls, s.total_time, s.min_time, s.max_time, s.mean_time
+		FROM 
+			pg_stat_statements s
+		JOIN
+			pg_database d ON d.oid = s.dbid
+		WHERE
+			d.datname = '%s' AND calls > 10
+		ORDER BY s.mean_time DESC
+		LIMIT 1000;`, dbName)
+	return db.Query(query)
+}
 
-	// 一个 udf 会生成一颗 Tree
-	var sqlTree *depgraph.Graph
-
+func handleQueryLineage(qs *QueryStore, conf C.PostgresService, db *sql.DB, wm *writer.WriterManager) {
+	var graph *depgraph.Graph
 	udf, err := lineage.IdentifyFuncCall(qs.Query)
 	if err == nil {
-		sqlTree, err = lineage.HandleUDF4Lineage(ds.DB, udf)
+		graph, err = lineage.HandleUDF4Lineage(db, udf)
 	} else {
-		sqlTree, err = lineage.Parse(qs.Query)
+		graph, err = lineage.Parse(qs.Query)
 	}
+
 	if err != nil {
-		log.Errorf("Parse err: %s", err)
+		log.Debugf("Skip invalid query: %s, err: %v", trimQuery(qs.Query), err)
 		return
 	}
 
 	udf.Calls = qs.Calls
+	graph.SetNamespace(conf.Label)
 
-	log.Debugf("UDF Graph: %+v", sqlTree)
-	for i, layer := range sqlTree.TopoSortedLayers() {
-		log.Debugf("UDF Graph %d: %s\n", i, strings.Join(layer, ", "))
+	log.Debugf("Lineage Graph for query: %s", trimQuery(qs.Query))
+	for i, layer := range graph.TopoSortedLayers() {
+		log.Debugf("Layer %d: %s", i, strings.Join(layer, ", "))
 	}
 
-	// 设置所属命名空间，避免节点冲突
-	sqlTree.SetNamespace(ds.Label)
-
-	if err := m.CreateGraphPostgres(sqlTree.ShrinkGraph(), udf, config.Service.Postgres); err != nil {
-		log.Errorf("UDF CreateGraph err: %s ", err)
+	if err := wm.CreateGraphPostgres(graph.ShrinkGraph(), udf, conf); err != nil {
+		log.Errorf("Failed to write lineage graph: %v", err)
 	}
 }
 
-func completeLineageGraph(ds *DataSource, m *writer.WriterManager) {
-
-	rows, err := ds.DB.Query(`
+func completeLineageGraph(conf C.PostgresService, db *sql.DB, wm *writer.WriterManager) error {
+	rows, err := db.Query(`
 		SELECT 
 			COALESCE(p.relname, st.relname) AS relname,
 			COALESCE(n.nspname, st.schemaname) AS schemaname,
-			SUM(st.seq_scan) AS seq_scan,
-			SUM(st.seq_tup_read) AS seq_tup_read,
-			SUM(COALESCE(st.idx_scan, 0)) AS idx_scan,
-			SUM(COALESCE(st.idx_tup_fetch, 0)) AS idx_tup_fetch,
-			STRING_AGG(DISTINCT COALESCE(obj_description(st.relid), ''), ' | ') AS comment
+			SUM(st.seq_scan), SUM(st.seq_tup_read),
+			SUM(COALESCE(st.idx_scan, 0)), SUM(COALESCE(st.idx_tup_fetch, 0)),
+			STRING_AGG(DISTINCT COALESCE(obj_description(st.relid), ''), ' | ')
 		FROM pg_stat_user_tables st
 		LEFT JOIN pg_inherits i ON st.relid = i.inhrelid
 		LEFT JOIN pg_class p ON i.inhparent = p.oid
 		LEFT JOIN pg_namespace n ON p.relnamespace = n.oid
 		WHERE st.schemaname !~ '^pg_temp_'
-		AND st.schemaname !~ '_del$'
-		AND st.schemaname NOT IN ('sync', 'sync_his', 'partman', 'debug')
-		GROUP BY COALESCE(p.relname, st.relname),
-				COALESCE(n.nspname, st.schemaname)
+		  AND st.schemaname !~ '_del$'
+		  AND st.schemaname NOT IN ('sync', 'sync_his', 'partman', 'debug')
+		GROUP BY relname, schemaname
 		ORDER BY schemaname, relname;
 	`)
 	if err != nil {
-		log.Fatalf("Unable to execute query: %v\n", err)
+		return fmt.Errorf("failed to query table stats: %w", err)
 	}
 	defer rows.Close()
 
 	for rows.Next() {
-		var relname, schemaName, comment string
-		var seqScan, seqTupRead, idxScan, idxTupFetch int64
-		err := rows.Scan(&relname, &schemaName, &seqScan, &seqTupRead, &idxScan, &idxTupFetch, &comment)
-		if err != nil {
-			log.Fatalf("Error scanning row: %v\n", err)
+		var t service.Table
+		if err := rows.Scan(
+			&t.RelName, &t.SchemaName,
+			&t.SeqScan, &t.SeqTupRead,
+			&t.IdxScan, &t.IdxTupFetch,
+			&t.Comment,
+		); err != nil {
+			return fmt.Errorf("scan error: %w", err)
 		}
+		t.Database = conf.Label
 
-		err = m.CompleteTableNode(&service.Table{
-			Database:    ds.Label,
-			SchemaName:  schemaName,
-			RelName:     relname,
-			SeqScan:     seqScan,
-			SeqTupRead:  seqTupRead,
-			IdxScan:     idxScan,
-			IdxTupFetch: idxTupFetch,
-			Comment:     comment,
-		}, config.Service.Postgres)
-		if err != nil {
-			log.Fatalf("Error updating Neo4j: %v\n", err)
+		if err := wm.CompleteTableNode(&t, conf); err != nil {
+			return fmt.Errorf("failed to complete node: %w", err)
 		}
-
 	}
 
-	log.Info("Data updated successfully in Neo4j.")
+	log.Infof("Lineage node metadata updated for: %s", conf.Label)
+	return nil
+}
+
+func trimQuery(query string) string {
+	if len(query) > 80 {
+		return query[:80] + "..."
+	}
+	return query
+}
+
+func safeClose(name string, closer interface{ Close() error }) {
+	if closer != nil {
+		if err := closer.Close(); err != nil {
+			log.Warnf("Error closing %s: %v", name, err)
+		}
+	}
 }

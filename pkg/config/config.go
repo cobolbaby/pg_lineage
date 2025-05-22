@@ -32,13 +32,15 @@ type Neo4jService struct {
 	URL      string `mapstructure:"url"`
 	User     string `mapstructure:"user"`
 	Password string `mapstructure:"password"`
+	Enabled  bool   `mapstructure:"enabled"`
 }
 
 type PostgresService struct {
-	Zone   string `mapstructure:"zone"`
-	DSN    string `mapstructure:"dsn"`
-	DBName string `mapstructure:"dbname"`
-	Label  string `mapstructure:"label"`
+	Zone    string `mapstructure:"zone"`
+	DSN     string `mapstructure:"dsn"`
+	DBName  string `mapstructure:"dbname"`
+	Label   string `mapstructure:"label"`
+	Enabled bool   `mapstructure:"enabled"`
 }
 
 type GrafanaService struct {
