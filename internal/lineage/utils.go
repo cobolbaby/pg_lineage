@@ -18,8 +18,8 @@ var (
 		LIMIT 1;
 	`
 
-	PG_FuncCallPattern1 = regexp.MustCompile(`(?is)(select|call)\s+(\w+)\.(\w+)\((.*)\)\s*(;)?`)
-	PG_FuncCallPattern2 = regexp.MustCompile(`(?is)select\s+(.*)from\s+(\w+)\.(\w+)\((.*)\)\s*(as\s+(.*))?\s*(;)?`)
+	PG_FuncCallPattern1 = regexp.MustCompile(`(?is)^\s*(select|call)\s+(\w+)\.(\w+)\((.*)\)\s*(;)?`)
+	PG_FuncCallPattern2 = regexp.MustCompile(`(?is)^\s*select\s+(.*)from\s+(\w+)\.(\w+)\((.*)\)\s*(as\s+(.*))?\s*(;)?`)
 )
 
 func IdentifyFuncCall(sql string) (*service.Udf, error) {
