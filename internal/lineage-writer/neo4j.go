@@ -119,7 +119,7 @@ func (w *Neo4jLineageWriter) WriteDash2PanelEdge(p *service.Panel, d *service.Da
 		// 需要将 ID 作为唯一主键
 		return tx.Run(`
 				MATCH (pnode:lineage:grafana:dashboard {id: $pid}), (cnode:lineage:grafana:panel {id: $cid})
-				CREATE (pnode)-[e:include {udt: timestamp()}]->(cnode)
+				CREATE (pnode)-[e:contain {udt: timestamp()}]->(cnode)
 				RETURN e
 			`,
 
@@ -190,10 +190,10 @@ func (w *Neo4jLineageWriter) CompleteTableNode(r *service.Table, s config.Postgr
 	cypher := `
 		MERGE (n:lineage:postgresql:` + escapeLabel(r.Database) + `:` + r.SchemaName + ` {id: $id})
 		ON CREATE SET n.database = $database, n.schemaname = $schemaname, n.relname = $relname,
-					n.udt = timestamp(), n.comment = $comment,
+					n.udt = timestamp(), n.description = $description,
 					n.seq_scan = $seq_scan, n.seq_tup_read = $seq_tup_read,
 					n.idx_scan = $idx_scan, n.idx_tup_fetch = $idx_tup_fetch
-		ON MATCH SET n.udt = timestamp(), n.comment = $comment,
+		ON MATCH SET n.udt = timestamp(), n.description = $description,
 					n.seq_scan = $seq_scan, n.seq_tup_read = $seq_tup_read,
 					n.idx_scan = $idx_scan, n.idx_tup_fetch = $idx_tup_fetch
 	`
@@ -207,7 +207,7 @@ func (w *Neo4jLineageWriter) CompleteTableNode(r *service.Table, s config.Postgr
 			"seq_tup_read":  r.SeqTupRead,
 			"idx_scan":      r.IdxScan,
 			"idx_tup_fetch": r.IdxTupFetch,
-			"comment":       r.Comment,
+			"description":   r.Comment,
 		})
 		if err != nil {
 			return nil, err

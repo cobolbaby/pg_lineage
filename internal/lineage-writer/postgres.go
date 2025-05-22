@@ -220,7 +220,7 @@ func (w *PGLineageWriter) WriteDash2PanelEdge(p *service.Panel, d *service.Dashb
 		) VALUES (
 			'%s:grafana:%s:%s>%s', 
 			'%s:grafana:%s:%s>%s>%s', 
-			'data_logic', 
+			'contain', 
 			'{}', 
 			now(),
 			now(),
@@ -333,7 +333,7 @@ func (w *PGLineageWriter) CompleteTableNode(r *service.Table, s config.PostgresS
 				'seq_tup_read', %d,
 				'idx_scan', %d,
 				'idx_tup_fetch', %d,
-				'comment', regexp_replace('%s', '^0x', '')
+				'description', regexp_replace('%s', '^0x', '')
 			),
 			'postgresql-table', now(), now(), 'ITC180012'
 		)
@@ -345,7 +345,7 @@ func (w *PGLineageWriter) CompleteTableNode(r *service.Table, s config.PostgresS
 				'seq_tup_read', %d,
 				'idx_scan', %d,
 				'idx_tup_fetch', %d,
-				'comment', regexp_replace('%s', '^0x', '')
+				'description', regexp_replace('%s', '^0x', '')
 		);`,
 		s.Zone, r.Database, s.DBName, r.SchemaName, r.RelName,
 		s.Zone, r.Database, s.DBName, r.SchemaName, r.RelName,

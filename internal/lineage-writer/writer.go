@@ -2,7 +2,6 @@ package writer
 
 import (
 	"database/sql"
-	"fmt"
 	"pg_lineage/internal/service"
 	"pg_lineage/pkg/config"
 	"pg_lineage/pkg/depgraph"
@@ -122,11 +121,6 @@ func (w *WriterManager) CreateGraphGrafana(p *service.Panel, d *service.Dashboar
 	if err := w.writeDashboardNode(d, s); err != nil {
 		return err
 	}
-
-	if p.Title == "" {
-		p.Title = "Untitled Panel"
-	}
-	p.Title = fmt.Sprintf("%s %d-%d", p.Title, d.Dashboard.ID, p.ID)
 
 	if err := w.writePanelNode(p, d, s); err != nil {
 		return err
