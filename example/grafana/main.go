@@ -350,6 +350,11 @@ func getPanelDependencies(sp *ServiceProvider, panel *service.Panel) (map[*C.Pos
 	result := make(map[*C.PostgresService][]*service.Table)
 
 	for _, t := range panel.Targets {
+		// 针对无数据源的直接跳过
+		if t.Datasource == nil {
+			continue
+		}
+
 		dsResolved, err := resolveDatasource(sp.Grafana.Client, t.Datasource)
 		if err != nil {
 			log.Warnf("Skipping unresolved datasource: %v", err)

@@ -48,6 +48,7 @@ func (w *PGLineageWriter) ResetGraph() error {
 	defer rollbackOnError(tx, err)
 
 	smt := `
+		DELETE FROM manager.data_lineage_node WHERE service = 'postgresql' and type = 'postgresql-table' and author = 'ITC180012';
 		DELETE FROM manager.data_lineage_node WHERE service = 'grafana';
 		DELETE FROM manager.data_lineage_relationship WHERE down_node_name like '%:grafana:%';
 	`
