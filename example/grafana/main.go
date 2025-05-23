@@ -285,6 +285,13 @@ func processDatasourceForPanel(sp *ServiceProvider, panel *service.Panel, dashbo
 		return
 	}
 
+	if len(depMap) == 0 {
+		notCareDB := C.PostgresService{}
+		if err := sp.WriterManager.CreateGraphGrafana(panel, dashboard, *sp.Grafana.Config, nil, notCareDB); err != nil {
+			log.Errorf("Error creating graph for panel %d: %v", panel.ID, err)
+		}
+	}
+
 	for ds, dependencies := range depMap {
 		if err := sp.WriterManager.CreateGraphGrafana(panel, dashboard, *sp.Grafana.Config, dependencies, *ds); err != nil {
 			log.Errorf("Error creating graph for panel %d: %v", panel.ID, err)
