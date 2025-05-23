@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 
@@ -243,43 +244,12 @@ func processPanelRecursive(sp *ServiceProvider, dashboard *service.DashboardFull
 	}
 	panel.Title = fmt.Sprintf("%s %d-%d", panel.Title, dashboard.Dashboard.ID, panel.ID)
 
-	// // 处理 Mixed 模式
-	// if isMixedDatasource(panel.Datasource) {
-	// 	log.Debugf("Panel %d uses mixed datasource", panel.ID)
-	// 	for _, target := range panel.Targets {
-	// 		dsObj := target.Datasource
-	// 		if dsObj == nil {
-	// 			continue
-	// 		}
-	// 		datasource, err := resolveDatasource(sp.GrafanaClient, dsObj)
-	// 		if err != nil {
-	// 			log.Errorf("Error resolving mixed datasource: %v", err)
-	// 			continue
-	// 		}
-
-	// 		processDatasourceForPanel(sp, panel, dashboard, datasource)
-	// 	}
-	// 	return
-	// }
-
-	// // 普通模式
-	// datasource, err := resolveDatasource(sp.GrafanaClient, panel.Datasource)
-	// if err != nil {
-	// 	log.Errorf("Error resolving datasource: %v", err)
-	// 	return
-	// }
-
 	processDatasourceForPanel(sp, panel, dashboard)
 }
 
-// func isMixedDatasource(ds any) bool {
-// 	m, ok := ds.(map[string]any)
-// 	return ok && m["uid"] == "-- Mixed --"
-// }
-
 func processDatasourceForPanel(sp *ServiceProvider, panel *service.Panel, dashboard *service.DashboardFullWithMeta) {
 	// 获取 panel 所依赖的数据源及表信息
-	depMap, err := getPanelDependencies(sp, panel)
+	depMap, err := getPanelDependencies(sp, panel, dashboard)
 	if err != nil {
 		log.Errorf("Error getting dependencies for panel %d: %v", panel.ID, err)
 		return
@@ -298,19 +268,76 @@ func processDatasourceForPanel(sp *ServiceProvider, panel *service.Panel, dashbo
 		}
 	}
 }
-
-func resolveDatasource(client *grafanaclient.GrafanaHTTPAPI, ds any) (*models.DataSource, error) {
+func resolveDatasource(client *grafanaclient.GrafanaHTTPAPI, ds any, dashboard *service.DashboardFullWithMeta) (*models.DataSource, error) {
 	switch v := ds.(type) {
 	case string:
-		if strings.HasPrefix(v, "$") {
+		if strings.HasPrefix(v, "${") {
 			return nil, fmt.Errorf("template variable %s not resolved", v)
 		}
 		return getDatasourceByName(client, v)
+
 	case map[string]any:
-		return getDatasourceByObject(client, v)
+		uid, ok := v["uid"].(string)
+		if !ok {
+			return nil, fmt.Errorf("invalid uid type")
+		}
+
+		if !strings.HasPrefix(uid, "${") {
+			return getDatasourceByUid(client, uid)
+		}
+
+		varName := strings.TrimSuffix(strings.TrimPrefix(uid, "${"), "}")
+		templatingVar := findTemplatingVariable(dashboard, varName)
+		if templatingVar == nil {
+			return nil, fmt.Errorf("template variable '%s' not found in dashboard", varName)
+		}
+
+		dsName := extractDatasourceName(client, templatingVar)
+		if dsName == "" {
+			return nil, fmt.Errorf("template variable '%s' has no selected value", varName)
+		}
+		return getDatasourceByName(client, dsName)
+
 	default:
 		return nil, fmt.Errorf("unknown datasource type: %T", ds)
 	}
+}
+
+func findTemplatingVariable(dashboard *service.DashboardFullWithMeta, name string) *service.TemplateVar {
+	for _, t := range dashboard.Dashboard.Templating.List {
+		if t.Name == name {
+			return &t
+		}
+	}
+	return nil
+}
+
+func extractDatasourceName(client *grafanaclient.GrafanaHTTPAPI, t *service.TemplateVar) string {
+	// 如果没有 regex，无法进行匹配
+	if t.Regex == "" {
+		return ""
+	}
+
+	// 获取所有数据源
+	datasources, err := client.Datasources.GetDataSources()
+	if err != nil {
+		return ""
+	}
+
+	// 编译正则
+	re, err := regexp.Compile(t.Regex)
+	if err != nil {
+		return ""
+	}
+
+	// 匹配数据源名称，目前是匹配到一个数据源就返回，但实际应该返回一个数组然后继续遍历
+	for _, ds := range datasources.Payload {
+		if re.MatchString(ds.Name) {
+			return ds.Name
+		}
+	}
+
+	return ""
 }
 
 func getDatasourceByName(client *grafanaclient.GrafanaHTTPAPI, name string) (*models.DataSource, error) {
@@ -330,11 +357,9 @@ func getDatasourceByName(client *grafanaclient.GrafanaHTTPAPI, name string) (*mo
 	return ds.Payload, nil
 }
 
-func getDatasourceByObject(client *grafanaclient.GrafanaHTTPAPI, input map[string]any) (*models.DataSource, error) {
-
-	uid, ok := input["uid"].(string)
-	if !ok {
-		return nil, fmt.Errorf("invalid uid type")
+func getDatasourceByUid(client *grafanaclient.GrafanaHTTPAPI, uid string) (*models.DataSource, error) {
+	if uid == "" {
+		return nil, fmt.Errorf("uid is empty")
 	}
 
 	dsCache.mu.Lock()
@@ -353,7 +378,7 @@ func getDatasourceByObject(client *grafanaclient.GrafanaHTTPAPI, input map[strin
 	return ds.Payload, nil
 }
 
-func getPanelDependencies(sp *ServiceProvider, panel *service.Panel) (map[*C.PostgresService][]*service.Table, error) {
+func getPanelDependencies(sp *ServiceProvider, panel *service.Panel, dashboard *service.DashboardFullWithMeta) (map[*C.PostgresService][]*service.Table, error) {
 	result := make(map[*C.PostgresService][]*service.Table)
 
 	for _, t := range panel.Targets {
@@ -362,7 +387,8 @@ func getPanelDependencies(sp *ServiceProvider, panel *service.Panel) (map[*C.Pos
 			continue
 		}
 
-		dsResolved, err := resolveDatasource(sp.Grafana.Client, t.Datasource)
+		// TODO:转为数组
+		dsResolved, err := resolveDatasource(sp.Grafana.Client, t.Datasource, dashboard)
 		if err != nil {
 			log.Warnf("Skipping unresolved datasource: %v", err)
 			continue

@@ -22,17 +22,20 @@ type Panel struct {
 	Panels    []*Panel `json:"panels,omitempty"`    // 若是折叠组，包含子面板列表
 }
 
+type TemplateVar struct {
+	Name       string `json:"name"`
+	Regex      string `json:"regex"`
+	Type       string `json:"type"`
+	Query      string `json:"query"`
+	Datasource any    `json:"datasource"`
+}
+
 type Dashboard struct {
 	ID         int      `json:"id"`
 	Panels     []*Panel `json:"panels"`
 	Tags       []string `json:"tags"`
 	Templating struct {
-		List []struct {
-			Datasource any    `json:"datasource,omitempty"`
-			Label      string `json:"label"`
-			Query      any    `json:"query,omitempty"`
-			Type       string `json:"type"`
-		} `json:"list"`
+		List []TemplateVar `json:"list"`
 	} `json:"templating"`
 	Time struct {
 		From string `json:"from"`
