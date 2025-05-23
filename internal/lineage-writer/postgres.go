@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"pg_lineage/internal/service"
 	"pg_lineage/pkg/config"
-	"pg_lineage/pkg/log"
 )
 
 type PGLineageWriter struct {
@@ -94,7 +93,7 @@ func (w *PGLineageWriter) WriteDashboardNode(d *service.DashboardFullWithMeta, s
 		d.Dashboard.UID,
 	)
 
-	log.Debug(smt)
+	// log.Debug(smt)
 
 	if _, err = tx.Exec(smt); err != nil {
 		return err
@@ -144,7 +143,7 @@ func (w *PGLineageWriter) WritePanelNode(p *service.Panel, d *service.DashboardF
 		p.Description,
 	)
 
-	log.Debug(smt)
+	// log.Debug(smt)
 
 	if _, err = tx.Exec(smt); err != nil {
 		return err
@@ -189,7 +188,7 @@ func (w *PGLineageWriter) WriteTable2PanelEdge(p *service.Panel, d *service.Dash
 			s.Zone, s.Host, d.Meta.FolderTitle, d.Dashboard.Title, p.Title,
 		)
 
-		log.Debug(smt)
+		// log.Debug(smt)
 
 		if _, err = tx.Exec(smt); err != nil {
 			return err
@@ -234,7 +233,7 @@ func (w *PGLineageWriter) WriteDash2PanelEdge(p *service.Panel, d *service.Dashb
 		s.Zone, s.Host, d.Meta.FolderTitle, d.Dashboard.Title, p.Title,
 	)
 
-	log.Debug(smt)
+	// log.Debug(smt)
 
 	if _, err = tx.Exec(smt); err != nil {
 		return err
@@ -292,7 +291,7 @@ func (w *PGLineageWriter) WriteTableNode(r *service.Table, s config.PostgresServ
 		r.Calls,
 	)
 
-	log.Debug(smt)
+	// log.Debug(smt)
 
 	if _, err = tx.Exec(smt); err != nil {
 		return err
@@ -356,7 +355,7 @@ func (w *PGLineageWriter) CompleteTableNode(r *service.Table, s config.PostgresS
 		r.Comment,
 	)
 
-	log.Debug(smt)
+	// log.Debug(smt)
 
 	if _, err = tx.Exec(smt); err != nil {
 		return err

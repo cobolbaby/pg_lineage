@@ -41,16 +41,17 @@ type PostgresService struct {
 	DBName  string `mapstructure:"dbname"`
 	Label   string `mapstructure:"label"`
 	Enabled bool   `mapstructure:"enabled"`
+	Type    string `mapstructure:"type"`
 }
 
 type GrafanaService struct {
-	Zone         string  `mapstructure:"zone"`
-	Host         string  `mapstructure:"host"`
-	User         string  `mapstructure:"user"`
-	Password     string  `mapstructure:"password"`
-	OrgID        int64   `mapstructure:"org_id"`
-	DsMatchRules string  `mapstructure:"ds_match_rules"`
-	DashboardIDs []int64 `mapstructure:"dashids"`
+	Zone         string            `mapstructure:"zone"`
+	Host         string            `mapstructure:"host"`
+	User         string            `mapstructure:"user"`
+	Password     string            `mapstructure:"password"`
+	OrgID        int64             `mapstructure:"org_id"`
+	DashboardIDs []int64           `mapstructure:"dashids"`
+	Datasources  map[string]string `json:"datasources"`
 }
 
 func InitConfig(cfgFile string) (Config, error) {

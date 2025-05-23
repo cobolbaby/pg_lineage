@@ -362,9 +362,18 @@ func getPanelDependencies(sp *ServiceProvider, panel *service.Panel) (map[*C.Pos
 			continue
 		}
 
-		pgBundle, ok := sp.PG[dsResolved.Name]
+		// fix: 将 dsResolved.Name 转换为小写，适配 viper 配置文件的读取规则
+		dsResolved.Name = strings.ToLower(dsResolved.Name)
+
+		dbInstanceName, ok := sp.Grafana.Config.Datasources[dsResolved.Name]
+		if !ok {
+			log.Warnf("Datasource %s not found in Grafana datasources", dsResolved.Name)
+			continue
+		}
+
+		pgBundle, ok := sp.PG[dbInstanceName]
 		if !ok || pgBundle.Client == nil {
-			log.Warnf("Datasource %s not found in PG clients", dsResolved.Name)
+			log.Warnf("Datasource %s not found in PG clients", dbInstanceName)
 			continue
 		}
 
