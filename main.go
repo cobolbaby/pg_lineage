@@ -68,6 +68,11 @@ func main() {
 	}
 
 	for _, dsConf := range config.Service.Postgres {
+		// 目前仅支持 PG 高版本的血缘解析
+		if dsConf.Type != "postgres" {
+			continue
+		}
+
 		processDataSource(dsConf, writerManager)
 	}
 }
@@ -151,17 +156,20 @@ func completeLineageGraph(conf C.PostgresService, db *sql.DB, wm *writer.WriterM
 		SELECT 
 			COALESCE(p.relname, st.relname) AS relname,
 			COALESCE(n.nspname, st.schemaname) AS schemaname,
-			SUM(st.seq_scan), SUM(st.seq_tup_read),
-			SUM(COALESCE(st.idx_scan, 0)), SUM(COALESCE(st.idx_tup_fetch, 0)),
-			STRING_AGG(DISTINCT COALESCE(obj_description(st.relid), ''), ' | ')
+			SUM(st.seq_scan) AS seq_scan,
+			SUM(st.seq_tup_read) AS seq_tup_read,
+			SUM(COALESCE(st.idx_scan, 0)) AS idx_scan,
+			SUM(COALESCE(st.idx_tup_fetch, 0)) AS idx_tup_fetch,
+			STRING_AGG(DISTINCT COALESCE(obj_description(st.relid), ''), ' | ') AS comment
 		FROM pg_stat_user_tables st
 		LEFT JOIN pg_inherits i ON st.relid = i.inhrelid
 		LEFT JOIN pg_class p ON i.inhparent = p.oid
 		LEFT JOIN pg_namespace n ON p.relnamespace = n.oid
 		WHERE st.schemaname !~ '^pg_temp_'
-		  AND st.schemaname !~ '_del$'
-		  AND st.schemaname NOT IN ('sync', 'sync_his', 'partman', 'debug')
-		GROUP BY relname, schemaname
+		AND st.schemaname !~ '_del$'
+		AND st.schemaname NOT IN ('sync', 'sync_his', 'partman', 'debug')
+		GROUP BY COALESCE(p.relname, st.relname),
+				COALESCE(n.nspname, st.schemaname)
 		ORDER BY schemaname, relname;
 	`)
 	if err != nil {
