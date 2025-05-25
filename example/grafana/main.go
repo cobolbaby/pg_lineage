@@ -268,13 +268,17 @@ func processDatasourceForPanel(sp *ServiceProvider, panel *service.Panel, dashbo
 		}
 	}
 }
-func resolveDatasource(client *grafanaclient.GrafanaHTTPAPI, ds any, dashboard *service.DashboardFullWithMeta) (*models.DataSource, error) {
+func resolveDatasource(client *grafanaclient.GrafanaHTTPAPI, ds any, dashboard *service.DashboardFullWithMeta) ([]*models.DataSource, error) {
 	switch v := ds.(type) {
 	case string:
 		if strings.HasPrefix(v, "${") {
 			return nil, fmt.Errorf("template variable %s not resolved", v)
 		}
-		return getDatasourceByName(client, v)
+		dsObj, err := getDatasourceByName(client, v)
+		if err != nil {
+			return nil, err
+		}
+		return []*models.DataSource{dsObj}, nil
 
 	case map[string]any:
 		uid, ok := v["uid"].(string)
@@ -283,7 +287,11 @@ func resolveDatasource(client *grafanaclient.GrafanaHTTPAPI, ds any, dashboard *
 		}
 
 		if !strings.HasPrefix(uid, "${") {
-			return getDatasourceByUid(client, uid)
+			dsObj, err := getDatasourceByUid(client, uid)
+			if err != nil {
+				return nil, err
+			}
+			return []*models.DataSource{dsObj}, nil
 		}
 
 		varName := strings.TrimSuffix(strings.TrimPrefix(uid, "${"), "}")
@@ -292,11 +300,20 @@ func resolveDatasource(client *grafanaclient.GrafanaHTTPAPI, ds any, dashboard *
 			return nil, fmt.Errorf("template variable '%s' not found in dashboard", varName)
 		}
 
-		dsName := extractDatasourceName(client, templatingVar)
-		if dsName == "" {
-			return nil, fmt.Errorf("template variable '%s' has no selected value", varName)
+		dsNames := extractDatasourceName(client, templatingVar)
+		if len(dsNames) == 0 {
+			return nil, fmt.Errorf("template variable '%s' has no matched datasource", varName)
 		}
-		return getDatasourceByName(client, dsName)
+
+		var result []*models.DataSource
+		for _, name := range dsNames {
+			dsObj, err := getDatasourceByName(client, name)
+			if err != nil {
+				return nil, fmt.Errorf("error retrieving datasource '%s': %w", name, err)
+			}
+			result = append(result, dsObj)
+		}
+		return result, nil
 
 	default:
 		return nil, fmt.Errorf("unknown datasource type: %T", ds)
@@ -312,32 +329,33 @@ func findTemplatingVariable(dashboard *service.DashboardFullWithMeta, name strin
 	return nil
 }
 
-func extractDatasourceName(client *grafanaclient.GrafanaHTTPAPI, t *service.TemplateVar) string {
+func extractDatasourceName(client *grafanaclient.GrafanaHTTPAPI, t *service.TemplateVar) []string {
 	// 如果没有 regex，无法进行匹配
 	if t.Regex == "" {
-		return ""
+		return nil
 	}
 
 	// 获取所有数据源
 	datasources, err := client.Datasources.GetDataSources()
 	if err != nil {
-		return ""
+		return nil
 	}
 
-	// 编译正则
-	re, err := regexp.Compile(t.Regex)
+	// fix: Go 的正则库 不支持 正则两边的斜杠 /.../，所以需要在代码中去掉首尾的斜杠
+	re, err := regexp.Compile(strings.Trim(t.Regex, "/"))
 	if err != nil {
-		return ""
+		return nil
 	}
 
-	// 匹配数据源名称，目前是匹配到一个数据源就返回，但实际应该返回一个数组然后继续遍历
+	// 匹配所有符合的名称
+	var matched []string
 	for _, ds := range datasources.Payload {
 		if re.MatchString(ds.Name) {
-			return ds.Name
+			matched = append(matched, ds.Name)
 		}
 	}
 
-	return ""
+	return matched
 }
 
 func getDatasourceByName(client *grafanaclient.GrafanaHTTPAPI, name string) (*models.DataSource, error) {
@@ -382,49 +400,50 @@ func getPanelDependencies(sp *ServiceProvider, panel *service.Panel, dashboard *
 	result := make(map[*C.PostgresService][]*service.Table)
 
 	for _, t := range panel.Targets {
-		// 针对无数据源的直接跳过
+		// 跳过无数据源的 Target
 		if t.Datasource == nil {
 			continue
 		}
 
-		// TODO:转为数组
-		dsResolved, err := resolveDatasource(sp.Grafana.Client, t.Datasource, dashboard)
+		// 获取所有解析出的数据源
+		dsList, err := resolveDatasource(sp.Grafana.Client, t.Datasource, dashboard)
 		if err != nil {
 			log.Warnf("Skipping unresolved datasource: %v", err)
 			continue
 		}
 
-		// 只处理 Postgres 数据源
-		if dsResolved.Type != "postgres" {
-			log.Debugf("Datasource %s is not postgres, skipping", dsResolved.Name)
-			continue
-		}
+		for _, ds := range dsList {
+			// 只处理 Postgres 数据源
+			if ds.Type != "postgres" {
+				log.Debugf("Datasource %s is not postgres, skipping", ds.Name)
+				continue
+			}
 
-		// fix: 将 dsResolved.Name 转换为小写，适配 viper 配置文件的读取规则
-		dsResolved.Name = strings.ToLower(dsResolved.Name)
+			// fix: 将 Name 转换为小写，适配 viper 配置文件的读取规则
+			dsName := strings.ToLower(ds.Name)
 
-		dbInstanceName, ok := sp.Grafana.Config.Datasources[dsResolved.Name]
-		if !ok {
-			log.Warnf("Datasource %s not found in Grafana datasources", dsResolved.Name)
-			continue
-		}
+			dbInstanceName, ok := sp.Grafana.Config.Datasources[dsName]
+			if !ok {
+				log.Warnf("Datasource %s not found in Grafana datasources", dsName)
+				continue
+			}
 
-		pgBundle, ok := sp.PG[dbInstanceName]
-		if !ok || pgBundle.Client == nil {
-			log.Warnf("Datasource %s not found in PG clients", dbInstanceName)
-			continue
-		}
+			pgBundle, ok := sp.PG[dbInstanceName]
+			if !ok || pgBundle.Client == nil {
+				log.Warnf("Datasource %s not found in PG clients", dbInstanceName)
+				continue
+			}
 
-		var tables []*service.Table
+			var tables []*service.Table
+			if t.RawSQL != "" {
+				tables, _ = parseRawSQL(t.RawSQL, pgBundle)
+			} else if t.Query != "" {
+				tables, _ = parseRawSQL(t.Query, pgBundle)
+			}
 
-		if t.RawSQL != "" {
-			tables, _ = parseRawSQL(t.RawSQL, pgBundle)
-		} else if t.Query != "" { // 哪个插件用该 字段?
-			tables, _ = parseRawSQL(t.Query, pgBundle)
-		}
-
-		if len(tables) > 0 {
-			result[pgBundle.Config] = append(result[pgBundle.Config], tables...)
+			if len(tables) > 0 {
+				result[pgBundle.Config] = append(result[pgBundle.Config], tables...)
+			}
 		}
 	}
 
