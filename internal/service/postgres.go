@@ -6,6 +6,12 @@ import (
 )
 
 const (
+	DBTypePostgres  string = "postgresql"
+	DBTypeGreenplum string = "greenplum"
+	// 可添加更多类型
+)
+
+const (
 	REL_PERSIST     = "p"
 	REL_PERSIST_NOT = "t"
 )

@@ -173,19 +173,19 @@ func (w *PGLineageWriter) WriteTable2PanelEdge(p *service.Panel, d *service.Dash
 				name, 
 				author
 			) VALUES (
-				'%s:postgresql:%s:%s.%s.%s', 
+				'%s:%s:%s:%s.%s.%s', 
 				'%s:grafana:%s:%s>%s>%s', 
 				'data_logic', 
 				'{}', 
 				now(), 
 				now(), 
-				md5('%s:postgresql:%s:%s.%s.%s' || '_' || '%s:grafana:%s:%s>%s>%s' || '_' || '{}'::varchar), 
+				md5('%s:%s:%s:%s.%s.%s' || '_' || '%s:grafana:%s:%s>%s>%s' || '_' || '{}'::varchar), 
 				'ITC180012'
 			)
 			ON CONFLICT (name) DO NOTHING;`,
-			ds.Zone, t.Database, ds.DBName, t.SchemaName, t.RelName,
+			ds.Zone, ds.Type, t.Database, ds.DBName, t.SchemaName, t.RelName,
 			s.Zone, s.Host, d.Meta.FolderTitle, d.Dashboard.Title, p.Title,
-			ds.Zone, t.Database, ds.DBName, t.SchemaName, t.RelName,
+			ds.Zone, ds.Type, t.Database, ds.DBName, t.SchemaName, t.RelName,
 			s.Zone, s.Host, d.Meta.FolderTitle, d.Dashboard.Title, p.Title,
 		)
 
@@ -266,8 +266,8 @@ func (w *PGLineageWriter) WriteTableNode(r *service.Table, s config.PostgresServ
 		INSERT INTO manager.data_lineage_node(
 			node_name, site, service, domain, node, attribute, type, cdt, udt, author)
 		VALUES (
-			'%s:postgresql:%s:%s.%s.%s',
-			'%s', 'postgresql', '%s', '%s.%s.%s',
+			'%s:%s:%s:%s.%s.%s',
+			'%s', '%s', '%s', '%s.%s.%s',
 			jsonb_build_object(
 				'site', '%s',
 				'owner', '???',
@@ -277,7 +277,7 @@ func (w *PGLineageWriter) WriteTableNode(r *service.Table, s config.PostgresServ
 				'relpersistence', '%s',
 				'calls', %d
 			),
-			'postgresql-table', now(), now(), 'ITC180012'
+			'%s-table', now(), now(), 'ITC180012'
 		)
 		ON CONFLICT (node_name) DO UPDATE
 		SET udt = now(),
@@ -286,9 +286,10 @@ func (w *PGLineageWriter) WriteTableNode(r *service.Table, s config.PostgresServ
 				'{calls}',
 				to_jsonb( ((EXCLUDED.attribute->>'calls')::bigint + %d) )
 		);`,
-		s.Zone, r.Database, s.DBName, r.SchemaName, r.RelName,
-		s.Zone, r.Database, s.DBName, r.SchemaName, r.RelName,
+		s.Zone, s.Type, r.Database, s.DBName, r.SchemaName, r.RelName,
+		s.Zone, s.Type, r.Database, s.DBName, r.SchemaName, r.RelName,
 		s.Zone, s.DBName, r.SchemaName, r.RelName, r.RelPersistence, r.Calls,
+		s.Type,
 		r.Calls,
 	)
 
@@ -319,8 +320,8 @@ func (w *PGLineageWriter) CompleteTableNode(r *service.Table, s config.PostgresS
 		INSERT INTO manager.data_lineage_node(
 			node_name, site, service, domain, node, attribute, type, cdt, udt, author)
 		VALUES (
-			'%s:postgresql:%s:%s.%s.%s',
-			'%s', 'postgresql', '%s', '%s.%s.%s',
+			'%s:%s:%s:%s.%s.%s',
+			'%s', '%s', '%s', '%s.%s.%s',
 			jsonb_build_object(
 				'site', '%s',
 				'owner', '???',
@@ -335,7 +336,7 @@ func (w *PGLineageWriter) CompleteTableNode(r *service.Table, s config.PostgresS
 				'idx_tup_fetch', %d,
 				'description', regexp_replace('%s', '^0x', '')
 			),
-			'postgresql-table', now(), now(), 'ITC180012'
+			'%s-table', now(), now(), 'ITC180012'
 		)
 		ON CONFLICT (node_name) DO UPDATE SET
 			udt = now(),
@@ -347,13 +348,12 @@ func (w *PGLineageWriter) CompleteTableNode(r *service.Table, s config.PostgresS
 				'idx_tup_fetch', %d,
 				'description', regexp_replace('%s', '^0x', '')
 		);`,
-		s.Zone, r.Database, s.DBName, r.SchemaName, r.RelName,
-		s.Zone, r.Database, s.DBName, r.SchemaName, r.RelName,
+		s.Zone, s.Type, r.Database, s.DBName, r.SchemaName, r.RelName,
+		s.Zone, s.Type, r.Database, s.DBName, r.SchemaName, r.RelName,
 		s.Zone, r.Database, r.SchemaName, r.RelName, r.RelPersistence,
-		r.Calls, r.SeqScan, r.SeqTupRead, r.IdxScan, r.IdxTupFetch,
-		r.Comment,
-		r.Calls, r.SeqScan, r.SeqTupRead, r.IdxScan, r.IdxTupFetch,
-		r.Comment,
+		r.Calls, r.SeqScan, r.SeqTupRead, r.IdxScan, r.IdxTupFetch, r.Comment,
+		s.Type,
+		r.Calls, r.SeqScan, r.SeqTupRead, r.IdxScan, r.IdxTupFetch, r.Comment,
 	)
 
 	// log.Debug(smt)

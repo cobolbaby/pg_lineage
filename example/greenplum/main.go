@@ -5,31 +5,19 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"strings"
 
 	_ "github.com/lib/pq"
 
-	"pg_lineage/internal/lineage"
 	writer "pg_lineage/internal/lineage-writer"
 	"pg_lineage/internal/service"
 	C "pg_lineage/pkg/config"
-	"pg_lineage/pkg/depgraph"
 	"pg_lineage/pkg/log"
 )
-
-type QueryStore struct {
-	Query     string
-	Calls     int64
-	TotalTime float64
-	MinTime   float64
-	MaxTime   float64
-	MeanTime  float64
-}
 
 var config C.Config
 
 func init() {
-	configFile := flag.String("c", "./config/config.yaml", "path to config.yaml")
+	configFile := flag.String("c", "../../config/config.yaml", "path to config.yaml")
 	flag.Parse()
 
 	var err error
@@ -63,17 +51,14 @@ func main() {
 		PgDriver:    pgWriterDriver,
 	})
 
-	if err := writerManager.ResetGraph(); err != nil {
-		log.Fatalf("ResetGraph error: %v", err)
-	}
+	// if err := writerManager.ResetGraph(); err != nil {
+	// 	log.Fatalf("ResetGraph error: %v", err)
+	// }
 
 	for _, dsConf := range config.Service.Postgres {
-		// 目前仅支持 PG 高版本的血缘解析
-		if dsConf.Type != service.DBTypePostgres {
+		if dsConf.Type != service.DBTypeGreenplum {
 			continue
 		}
-
-		// TODO:如何扩展支持 GP，让代码写的更优雅一点
 
 		processDataSource(dsConf, writerManager)
 	}
@@ -89,67 +74,9 @@ func processDataSource(conf C.PostgresService, wm *writer.WriterManager) {
 	}
 	defer safeClose(conf.Label, db)
 
-	queries, err := fetchQueryStats(db, conf.DBName)
-	if err != nil {
-		log.Errorf("Error fetching query stats for %s: %v", conf.Label, err)
-		return
-	}
-	defer queries.Close()
-
-	for queries.Next() {
-		var qs QueryStore
-		if err := queries.Scan(&qs.Query, &qs.Calls, &qs.TotalTime, &qs.MinTime, &qs.MaxTime, &qs.MeanTime); err != nil {
-			log.Warnf("Query row scan error: %v", err)
-			continue
-		}
-		handleQueryLineage(&qs, conf, db, wm)
-	}
-
 	if err := completeLineageGraph(conf, db, wm); err != nil {
 		log.Errorf("Complete graph update error for %s: %v", conf.Label, err)
 		return
-	}
-}
-
-func fetchQueryStats(db *sql.DB, dbName string) (*sql.Rows, error) {
-	query := fmt.Sprintf(`
-		SELECT 
-			s.query, s.calls, s.total_time, s.min_time, s.max_time, s.mean_time
-		FROM 
-			pg_stat_statements s
-		JOIN
-			pg_database d ON d.oid = s.dbid
-		WHERE
-			d.datname = '%s' AND calls > 10
-		ORDER BY s.mean_time DESC
-		LIMIT 1000;`, dbName)
-	return db.Query(query)
-}
-
-func handleQueryLineage(qs *QueryStore, conf C.PostgresService, db *sql.DB, wm *writer.WriterManager) {
-	var graph *depgraph.Graph
-	udf, err := lineage.IdentifyFuncCall(qs.Query)
-	if err == nil {
-		graph, err = lineage.HandleUDF4Lineage(db, udf)
-	} else {
-		graph, err = lineage.Parse(qs.Query)
-	}
-
-	if err != nil {
-		log.Debugf("Skip invalid query: %s, err: %v", trimQuery(qs.Query), err)
-		return
-	}
-
-	udf.Calls = qs.Calls
-	graph.SetNamespace(conf.Label)
-
-	log.Debugf("Lineage Graph for query: %s", trimQuery(qs.Query))
-	for i, layer := range graph.TopoSortedLayers() {
-		log.Debugf("Layer %d: %s", i, strings.Join(layer, ", "))
-	}
-
-	if err := wm.CreateGraphPostgres(graph.ShrinkGraph(), udf, conf); err != nil {
-		log.Errorf("Failed to write lineage graph: %v", err)
 	}
 }
 
@@ -163,7 +90,7 @@ func completeLineageGraph(conf C.PostgresService, db *sql.DB, wm *writer.WriterM
 			SUM(COALESCE(st.idx_scan, 0)) AS idx_scan,
 			SUM(COALESCE(st.idx_tup_fetch, 0)) AS idx_tup_fetch,
 			STRING_AGG(DISTINCT COALESCE(obj_description(st.relid), ''), ' | ') AS comment
-		FROM pg_stat_user_tables st
+		FROM gp_stat_user_tables st
 		LEFT JOIN pg_inherits i ON st.relid = i.inhrelid
 		LEFT JOIN pg_class p ON i.inhparent = p.oid
 		LEFT JOIN pg_namespace n ON p.relnamespace = n.oid
@@ -198,13 +125,6 @@ func completeLineageGraph(conf C.PostgresService, db *sql.DB, wm *writer.WriterM
 
 	log.Infof("Lineage node metadata updated for: %s", conf.Label)
 	return nil
-}
-
-func trimQuery(query string) string {
-	if len(query) > 80 {
-		return query[:80] + "..."
-	}
-	return query
 }
 
 func safeClose(name string, closer interface{ Close() error }) {

@@ -98,7 +98,7 @@ func (w *Neo4jLineageWriter) WriteTable2PanelEdge(p *service.Panel, d *service.D
 		// 实际写入逻辑
 		for _, t := range dependencies {
 			_, err := tx.Run(`
-					MATCH (pnode:lineage:postgresql {id: $pid}), (cnode:lineage:grafana {id: $cid})
+					MATCH (pnode:lineage:`+ds.Type+` {id: $pid}), (cnode:lineage:grafana {id: $cid})
 					CREATE (pnode)-[e:downstream {udt: timestamp()}]->(cnode)
 					RETURN e
 				`, map[string]any{
@@ -146,7 +146,7 @@ func (w *Neo4jLineageWriter) WriteTableNode(r *service.Table, s config.PostgresS
 		// 需要将 ID 作为唯一主键
 		// CREATE CONSTRAINT ON (cc:lineage:postgresql) ASSERT cc.id IS UNIQUE
 		return tx.Run(`
-				MERGE (n:lineage:postgresql:`+escapeLabel(r.Database)+`:`+r.SchemaName+` {id: $id})
+				MERGE (n:lineage:`+s.Type+`:`+escapeLabel(r.Database)+`:`+r.SchemaName+` {id: $id})
 				ON CREATE SET n.database = $database, n.schemaname = $schemaname, n.relname = $relname, n.udt = timestamp(),
 							n.relpersistence = $relpersistence, n.calls = $calls
 				ON MATCH SET n.udt = timestamp(), n.relpersistence = $relpersistence, n.calls = n.calls + $calls
@@ -188,7 +188,7 @@ func (w *Neo4jLineageWriter) WriteFuncEdge(r *service.Udf, s config.PostgresServ
 func (w *Neo4jLineageWriter) CompleteTableNode(r *service.Table, s config.PostgresService) error {
 	// Create or update Neo4j node with PostgreSQL data
 	cypher := `
-		MERGE (n:lineage:postgresql:` + escapeLabel(r.Database) + `:` + r.SchemaName + ` {id: $id})
+		MERGE (n:lineage:` + s.Type + `:` + escapeLabel(r.Database) + `:` + r.SchemaName + ` {id: $id})
 		ON CREATE SET n.database = $database, n.schemaname = $schemaname, n.relname = $relname,
 					n.udt = timestamp(), n.description = $description,
 					n.seq_scan = $seq_scan, n.seq_tup_read = $seq_tup_read,
