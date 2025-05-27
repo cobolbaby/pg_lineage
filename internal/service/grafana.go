@@ -22,6 +22,14 @@ type Panel struct {
 	Panels    []*Panel `json:"panels,omitempty"`    // 若是折叠组，包含子面板列表
 }
 
+func (p *Panel) GetID() string {
+	return strconv.Itoa(p.ID)
+}
+
+func (p *Panel) IsTemp() bool {
+	return false
+}
+
 type TemplateVar struct {
 	Name       string `json:"name"`
 	Regex      string `json:"regex"`
@@ -55,10 +63,7 @@ type DashboardFullWithMeta struct {
 	Meta models.DashboardMeta `json:"meta,omitempty"`
 }
 
-func (p *Panel) GetID() string {
-	return strconv.Itoa(p.ID)
-}
-
-func (p *Panel) IsTemp() bool {
-	return false
+type SqlTableDependency struct {
+	RawSql string
+	Tables []*Table
 }

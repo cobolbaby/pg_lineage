@@ -103,14 +103,13 @@ func (w *PGLineageWriter) WriteDashboardNode(d *service.DashboardFullWithMeta, s
 	return tx.Commit()
 }
 
-func (w *PGLineageWriter) WritePanelNode(p *service.Panel, d *service.DashboardFullWithMeta, s config.GrafanaService) error {
+func (w *PGLineageWriter) WritePanelNode(p *service.Panel, d *service.DashboardFullWithMeta, s config.GrafanaService, dependencies []*service.SqlTableDependency, ds config.PostgresService) error {
 	tx, err := w.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer rollbackOnError(tx, err)
 
-	// 直接使用 Debugf 中的 SQL INSERT，和原来你写的逻辑一样
 	smt := fmt.Sprintf(`
 		INSERT INTO manager.data_lineage_node(
 			node_name, site, service, domain, node, attribute, type, cdt, udt, author)
@@ -150,49 +149,67 @@ func (w *PGLineageWriter) WritePanelNode(p *service.Panel, d *service.DashboardF
 		return err
 	}
 
+	for _, dep := range dependencies {
+		stmt := `
+			INSERT INTO manager.sql_analysis (
+				db_name, sql_script, type, name, datamap_type, input_pic, cdt, udt)
+			VALUES (
+				$1, $2, 'query', $3, 'node', 'ITC180012', now(), now()
+			)
+			ON CONFLICT ON CONSTRAINT sql_analysis_pkey DO NOTHING;
+		`
+
+		nodeName := fmt.Sprintf("%s:grafana:%s:%s>%s>%s", s.Zone, s.Host, d.Meta.FolderTitle, d.Dashboard.Title, p.Title)
+
+		if _, err := tx.Exec(stmt, ds.Label, dep.RawSql, nodeName); err != nil {
+			return err
+		}
+	}
+
 	return tx.Commit()
 }
 
-func (w *PGLineageWriter) WriteTable2PanelEdge(p *service.Panel, d *service.DashboardFullWithMeta, s config.GrafanaService, dependencies []*service.Table, ds config.PostgresService) error {
+func (w *PGLineageWriter) WriteTable2PanelEdge(p *service.Panel, d *service.DashboardFullWithMeta, s config.GrafanaService, dependencies []*service.SqlTableDependency, ds config.PostgresService) error {
 	tx, err := w.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer rollbackOnError(tx, err)
 
-	for _, t := range dependencies {
-
-		smt := fmt.Sprintf(`
-			INSERT INTO manager.data_lineage_relationship(
-				up_node_name, 
-				down_node_name, 
-				type, 
-				attribute, 
-				cdt, 
-				udt, 
-				name, 
-				author
-			) VALUES (
-				'%s:%s:%s:%s.%s.%s', 
-				'%s:grafana:%s:%s>%s>%s', 
-				'data_logic', 
-				'{}', 
-				now(), 
-				now(), 
-				md5('%s:%s:%s:%s.%s.%s' || '_' || '%s:grafana:%s:%s>%s>%s' || '_' || '{}'::varchar), 
-				'ITC180012'
+	for _, dep := range dependencies {
+		for _, t := range dep.Tables {
+			smt := fmt.Sprintf(`
+				INSERT INTO manager.data_lineage_relationship(
+					up_node_name, 
+					down_node_name, 
+					type, 
+					attribute, 
+					cdt, 
+					udt, 
+					name, 
+					author
+				) VALUES (
+					'%s:%s:%s:%s.%s.%s', 
+					'%s:grafana:%s:%s>%s>%s', 
+					'data_logic', 
+					'{}', 
+					now(), 
+					now(), 
+					md5('%s:%s:%s:%s.%s.%s' || '_' || '%s:grafana:%s:%s>%s>%s' || '_' || '{}'::varchar), 
+					'ITC180012'
+				)
+				ON CONFLICT (name) DO NOTHING;`,
+				ds.Zone, ds.Type, t.Database, ds.DBName, t.SchemaName, t.RelName,
+				s.Zone, s.Host, d.Meta.FolderTitle, d.Dashboard.Title, p.Title,
+				ds.Zone, ds.Type, t.Database, ds.DBName, t.SchemaName, t.RelName,
+				s.Zone, s.Host, d.Meta.FolderTitle, d.Dashboard.Title, p.Title,
 			)
-			ON CONFLICT (name) DO NOTHING;`,
-			ds.Zone, ds.Type, t.Database, ds.DBName, t.SchemaName, t.RelName,
-			s.Zone, s.Host, d.Meta.FolderTitle, d.Dashboard.Title, p.Title,
-			ds.Zone, ds.Type, t.Database, ds.DBName, t.SchemaName, t.RelName,
-			s.Zone, s.Host, d.Meta.FolderTitle, d.Dashboard.Title, p.Title,
-		)
 
-		// log.Debug(smt)
+			// log.Debug(smt)
 
-		if _, err = tx.Exec(smt); err != nil {
-			return err
+			if _, err = tx.Exec(smt); err != nil {
+				return err
+			}
 		}
 
 	}
@@ -261,7 +278,6 @@ func (w *PGLineageWriter) WriteTableNode(r *service.Table, s config.PostgresServ
 	}
 	defer rollbackOnError(tx, err)
 
-	// 调整 Debugf 输出的 INSERT 语句
 	smt := fmt.Sprintf(`
 		INSERT INTO manager.data_lineage_node(
 			node_name, site, service, domain, node, attribute, type, cdt, udt, author)
@@ -315,7 +331,6 @@ func (w *PGLineageWriter) CompleteTableNode(r *service.Table, s config.PostgresS
 	}
 	defer rollbackOnError(tx, err)
 
-	// 更新后的 Debugf 输出，包含更多字段的处理
 	smt := fmt.Sprintf(`
 		INSERT INTO manager.data_lineage_node(
 			node_name, site, service, domain, node, attribute, type, cdt, udt, author)

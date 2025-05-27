@@ -61,7 +61,7 @@ func (w *Neo4jLineageWriter) WriteDashboardNode(d *service.DashboardFullWithMeta
 	return err
 }
 
-func (w *Neo4jLineageWriter) WritePanelNode(p *service.Panel, d *service.DashboardFullWithMeta, s config.GrafanaService) error {
+func (w *Neo4jLineageWriter) WritePanelNode(p *service.Panel, d *service.DashboardFullWithMeta, s config.GrafanaService, dependencies []*service.SqlTableDependency, ds config.PostgresService) error {
 	_, err := w.session.WriteTransaction(func(tx neo4j.Transaction) (any, error) {
 
 		// 需要将 ID 作为唯一主键
@@ -93,20 +93,23 @@ func (w *Neo4jLineageWriter) WritePanelNode(p *service.Panel, d *service.Dashboa
 	return err
 }
 
-func (w *Neo4jLineageWriter) WriteTable2PanelEdge(p *service.Panel, d *service.DashboardFullWithMeta, s config.GrafanaService, dependencies []*service.Table, ds config.PostgresService) error {
+func (w *Neo4jLineageWriter) WriteTable2PanelEdge(p *service.Panel, d *service.DashboardFullWithMeta, s config.GrafanaService, dependencies []*service.SqlTableDependency, ds config.PostgresService) error {
 	_, err := w.session.WriteTransaction(func(tx neo4j.Transaction) (any, error) {
 		// 实际写入逻辑
-		for _, t := range dependencies {
-			_, err := tx.Run(`
+		for _, dep := range dependencies {
+			for _, t := range dep.Tables {
+
+				_, err := tx.Run(`
 					MATCH (pnode:lineage:`+ds.Type+` {id: $pid}), (cnode:lineage:grafana {id: $cid})
 					CREATE (pnode)-[e:downstream {udt: timestamp()}]->(cnode)
 					RETURN e
 				`, map[string]any{
-				"pid": fmt.Sprintf("%s.%s.%s", t.Database, t.SchemaName, t.RelName),
-				"cid": fmt.Sprintf("%s>%d>%d", s.Host, d.Dashboard.ID, p.ID),
-			})
-			if err != nil {
-				log.Error(err)
+					"pid": fmt.Sprintf("%s.%s.%s", t.Database, t.SchemaName, t.RelName),
+					"cid": fmt.Sprintf("%s>%d>%d", s.Host, d.Dashboard.ID, p.ID),
+				})
+				if err != nil {
+					log.Error(err)
+				}
 			}
 		}
 		return nil, nil

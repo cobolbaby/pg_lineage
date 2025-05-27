@@ -54,7 +54,7 @@ var (
 )
 
 func init() {
-	configFile := flag.String("c", "./config.yaml", "path to config.yaml")
+	configFile := flag.String("c", "../../config/config.yaml", "path to config.yaml")
 	flag.Parse()
 
 	var err error
@@ -396,10 +396,15 @@ func getDatasourceByUid(client *grafanaclient.GrafanaHTTPAPI, uid string) (*mode
 	return ds.Payload, nil
 }
 
-func getPanelDependencies(sp *ServiceProvider, panel *service.Panel, dashboard *service.DashboardFullWithMeta) (map[*C.PostgresService][]*service.Table, error) {
-	result := make(map[*C.PostgresService][]*service.Table)
+func getPanelDependencies(sp *ServiceProvider, panel *service.Panel, dashboard *service.DashboardFullWithMeta) (map[*C.PostgresService][]*service.SqlTableDependency, error) {
+	result := make(map[*C.PostgresService][]*service.SqlTableDependency)
 
 	for _, t := range panel.Targets {
+		// 如果 panel target 中 datasource 属性为空，则尝试从 panel datasource 中获取
+		if t.Datasource == nil && panel.Datasource != nil {
+			t.Datasource = panel.Datasource
+		}
+
 		// 跳过无数据源的 Target
 		if t.Datasource == nil {
 			continue
@@ -435,15 +440,22 @@ func getPanelDependencies(sp *ServiceProvider, panel *service.Panel, dashboard *
 			}
 
 			var tables []*service.Table
+			var dependency *service.SqlTableDependency
 			if t.RawSQL != "" {
 				tables, _ = parseRawSQL(t.RawSQL, pgBundle)
+				dependency = &service.SqlTableDependency{
+					RawSql: t.RawSQL,
+					Tables: tables,
+				}
 			} else if t.Query != "" {
 				tables, _ = parseRawSQL(t.Query, pgBundle)
+				dependency = &service.SqlTableDependency{
+					RawSql: t.Query,
+					Tables: tables,
+				}
 			}
 
-			if len(tables) > 0 {
-				result[pgBundle.Config] = append(result[pgBundle.Config], tables...)
-			}
+			result[pgBundle.Config] = append(result[pgBundle.Config], dependency)
 		}
 	}
 
@@ -458,6 +470,7 @@ func parseRawSQL(rawsql string, pgBundle *PGBundle) ([]*service.Table, error) {
 	if err == nil {
 		sqlTree, err = lineage.HandleUDF4Lineage(pgBundle.Client, udf)
 	} else {
+		// TODO:如果 rawsql 中含有 Grafana 中的模版变量，则需要考虑先渲染模版变量，然后再做语法解析，否则会报语法错误
 		sqlTree, err = lineage.Parse(rawsql)
 	}
 	if err != nil {
@@ -470,9 +483,9 @@ func parseRawSQL(rawsql string, pgBundle *PGBundle) ([]*service.Table, error) {
 	for _, v := range sqlTree.ShrinkGraph().GetNodes() {
 		if r, ok := v.(*service.Table); ok {
 
-			// TODO: Graph 中仍然存在临时节点, Why?
-			if r.SchemaName == "" {
-				log.Warnf("Invalid r.SchemaName: %+v", r)
+			// Graph 中可能出现临时节点，该临时节点就是最终生成的数据集合
+			if r.IsTemp() {
+				log.Warnf("Ignore temp node: %+v", r)
 				continue
 			}
 

@@ -43,9 +43,9 @@ func InitWriterManager(ctx *WriterContext) *WriterManager {
 type LineageWriter interface {
 	Init(ctx *WriterContext) error
 	WriteDashboardNode(d *service.DashboardFullWithMeta, s config.GrafanaService) error
-	WritePanelNode(p *service.Panel, d *service.DashboardFullWithMeta, s config.GrafanaService) error
+	WritePanelNode(p *service.Panel, d *service.DashboardFullWithMeta, s config.GrafanaService, t []*service.SqlTableDependency, ds config.PostgresService) error
 	WriteDash2PanelEdge(p *service.Panel, d *service.DashboardFullWithMeta, s config.GrafanaService) error
-	WriteTable2PanelEdge(p *service.Panel, d *service.DashboardFullWithMeta, s config.GrafanaService, t []*service.Table, ds config.PostgresService) error
+	WriteTable2PanelEdge(p *service.Panel, d *service.DashboardFullWithMeta, s config.GrafanaService, t []*service.SqlTableDependency, ds config.PostgresService) error
 	WriteTableNode(t *service.Table, s config.PostgresService) error
 	WriteFuncEdge(t *service.Udf, s config.PostgresService) error
 	CompleteTableNode(t *service.Table, s config.PostgresService) error
@@ -85,9 +85,9 @@ func (w *WriterManager) writeDashboardNode(d *service.DashboardFullWithMeta, s c
 	})
 }
 
-func (w *WriterManager) writePanelNode(p *service.Panel, d *service.DashboardFullWithMeta, s config.GrafanaService) error {
+func (w *WriterManager) writePanelNode(p *service.Panel, d *service.DashboardFullWithMeta, s config.GrafanaService, t []*service.SqlTableDependency, ds config.PostgresService) error {
 	return w.apply(func(writer LineageWriter) error {
-		return writer.WritePanelNode(p, d, s)
+		return writer.WritePanelNode(p, d, s, t, ds)
 	})
 }
 
@@ -97,7 +97,7 @@ func (w *WriterManager) writeDash2PanelEdge(p *service.Panel, d *service.Dashboa
 	})
 }
 
-func (w *WriterManager) writeTable2PanelEdge(p *service.Panel, d *service.DashboardFullWithMeta, s config.GrafanaService, t []*service.Table, ds config.PostgresService) error {
+func (w *WriterManager) writeTable2PanelEdge(p *service.Panel, d *service.DashboardFullWithMeta, s config.GrafanaService, t []*service.SqlTableDependency, ds config.PostgresService) error {
 	return w.apply(func(writer LineageWriter) error {
 		return writer.WriteTable2PanelEdge(p, d, s, t, ds)
 	})
@@ -127,13 +127,13 @@ func (w *WriterManager) ResetGraph() error {
 	})
 }
 
-func (w *WriterManager) CreateGraphGrafana(p *service.Panel, d *service.DashboardFullWithMeta, s config.GrafanaService, dependencies []*service.Table, ds config.PostgresService) error {
+func (w *WriterManager) CreateGraphGrafana(p *service.Panel, d *service.DashboardFullWithMeta, s config.GrafanaService, dependencies []*service.SqlTableDependency, ds config.PostgresService) error {
 
 	if err := w.writeDashboardNode(d, s); err != nil {
 		return err
 	}
 
-	if err := w.writePanelNode(p, d, s); err != nil {
+	if err := w.writePanelNode(p, d, s, dependencies, ds); err != nil {
 		return err
 	}
 	if err := w.writeDash2PanelEdge(p, d, s); err != nil {
@@ -161,9 +161,9 @@ func (w *WriterManager) CreateGraphPostgres(graph *depgraph.Graph, udf *service.
 	for _, v := range graph.GetNodes() {
 		r, _ := v.(*service.Table)
 
-		// TODO: Graph 中仍然存在临时节点, Why?
-		if r.SchemaName == "" {
-			log.Warnf("Invalid r.SchemaName: %+v", r)
+		// Graph 中可能出现临时节点，该临时节点就是最终生成的数据集合
+		if r.IsTemp() {
+			log.Warnf("Ignore temp node: %+v", r)
 			continue
 		}
 
