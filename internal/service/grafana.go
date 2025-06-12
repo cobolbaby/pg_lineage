@@ -39,10 +39,11 @@ type TemplateVar struct {
 }
 
 type Dashboard struct {
-	ID         int      `json:"id"`
-	Panels     []*Panel `json:"panels"`
-	Tags       []string `json:"tags"`
-	Templating struct {
+	Description string   `json:"description"`
+	ID          int      `json:"id"`
+	Panels      []*Panel `json:"panels"`
+	Tags        []string `json:"tags"`
+	Templating  struct {
 		List []TemplateVar `json:"list"`
 	} `json:"templating"`
 	Time struct {

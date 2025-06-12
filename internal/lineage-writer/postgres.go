@@ -2,10 +2,14 @@ package writer
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"pg_lineage/internal/service"
 	"pg_lineage/pkg/config"
+	"pg_lineage/pkg/log"
+
+	"github.com/samber/lo"
 )
 
 type PGLineageWriter struct {
@@ -48,6 +52,7 @@ func (w *PGLineageWriter) ResetGraph() error {
 	defer rollbackOnError(tx, err)
 
 	smt := `
+		DELETE FROM manager.data_lineage_node WHERE service = 'greenplum' and type = 'greenplum-table';
 		DELETE FROM manager.data_lineage_node WHERE service = 'postgresql' and type = 'postgresql-table';
 		DELETE FROM manager.data_lineage_node WHERE service = 'grafana';
 		DELETE FROM manager.data_lineage_relationship WHERE down_node_name like '%:grafana:%';
@@ -67,6 +72,8 @@ func (w *PGLineageWriter) WriteDashboardNode(d *service.DashboardFullWithMeta, s
 	}
 	defer rollbackOnError(tx, err)
 
+	pics, _ := json.Marshal(lo.Uniq([]string{d.Meta.CreatedBy, d.Meta.UpdatedBy}))
+
 	smt := fmt.Sprintf(`
 		INSERT INTO manager.data_lineage_node(
 			node_name, site, service, domain, node, attribute, type, cdt, udt, author
@@ -79,22 +86,26 @@ func (w *PGLineageWriter) WriteDashboardNode(d *service.DashboardFullWithMeta, s
 				'created_by', '%s',
 				'updated_by', '%s',
 				'dashboard_title', '%s',
-				'dashboard_uid', '%s'
+				'dashboard_uid', '%s',
+				'description', '%s',
+				'pic', '%s'::jsonb
 			),
 			'dashboard', now(), now(), 'ITC180012'
 		)
 		ON CONFLICT (node_name) DO NOTHING;`,
 		s.Zone, s.Host, d.Meta.FolderTitle, d.Dashboard.Title,
 		s.Zone, s.Host, d.Meta.FolderTitle, d.Dashboard.Title,
-		d.Meta.Created.String(),
-		d.Meta.Updated.String(),
+		d.Meta.Created,
+		d.Meta.Updated,
 		d.Meta.CreatedBy,
 		d.Meta.UpdatedBy,
 		d.Dashboard.Title,
 		d.Dashboard.UID,
+		d.Dashboard.Description,
+		pics,
 	)
 
-	// log.Debug(smt)
+	log.Debug(smt)
 
 	if _, err = tx.Exec(smt); err != nil {
 		return err
@@ -109,6 +120,8 @@ func (w *PGLineageWriter) WritePanelNode(p *service.Panel, d *service.DashboardF
 		return err
 	}
 	defer rollbackOnError(tx, err)
+
+	pics, _ := json.Marshal(lo.Uniq([]string{d.Meta.CreatedBy, d.Meta.UpdatedBy}))
 
 	smt := fmt.Sprintf(`
 		INSERT INTO manager.data_lineage_node(
@@ -125,15 +138,16 @@ func (w *PGLineageWriter) WritePanelNode(p *service.Panel, d *service.DashboardF
 				'panel_title', '%s',
 				'dashboard_uid', '%s',
 				'dashboard_title', '%s',
-				'panel_description', regexp_replace('%s', '^0x', '')
+				'description', regexp_replace('%s', '^0x', ''),
+				'pic', '%s'::jsonb
 			),
 			'dashboard-panel', now(), now(), 'ITC180012'
 		)
 		ON CONFLICT (node_name) DO NOTHING;`,
 		s.Zone, s.Host, d.Meta.FolderTitle, d.Dashboard.Title, p.Title, // node_name
 		s.Zone, s.Host, d.Meta.FolderTitle, d.Dashboard.Title, p.Title, // domain, node
-		d.Meta.Created.String(),
-		d.Meta.Updated.String(),
+		d.Meta.Created,
+		d.Meta.Updated,
 		d.Meta.CreatedBy,
 		d.Meta.UpdatedBy,
 		p.Type,
@@ -141,6 +155,7 @@ func (w *PGLineageWriter) WritePanelNode(p *service.Panel, d *service.DashboardF
 		d.Dashboard.UID,
 		d.Dashboard.Title,
 		p.Description,
+		pics,
 	)
 
 	// log.Debug(smt)
@@ -286,12 +301,17 @@ func (w *PGLineageWriter) WriteTableNode(r *service.Table, s config.PostgresServ
 			'%s', '%s', '%s', '%s.%s.%s',
 			jsonb_build_object(
 				'site', '%s',
-				'owner', '???',
+				'pic', '',
 				'database', '%s',
 				'schema', '%s',
 				'tablename', '%s',
 				'relpersistence', '%s',
-				'calls', %d
+				'calls', %d,
+				'seq_scan', 0,
+				'seq_tup_read', 0,
+				'idx_scan', 0,
+				'idx_tup_fetch', 0,
+				'description', ''
 			),
 			'%s-table', now(), now(), 'ITC180012'
 		)
@@ -339,7 +359,7 @@ func (w *PGLineageWriter) CompleteTableNode(r *service.Table, s config.PostgresS
 			'%s', '%s', '%s', '%s.%s.%s',
 			jsonb_build_object(
 				'site', '%s',
-				'owner', '???',
+				'pic', '',
 				'database', '%s',
 				'schema', '%s',
 				'tablename', '%s',
