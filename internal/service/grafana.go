@@ -12,7 +12,6 @@ type Panel struct {
 	ID          int    `json:"id"`
 	Targets     []struct {
 		Datasource any    `json:"datasource"`
-		Query      string `json:"query"`
 		RawQuery   bool   `json:"rawQuery"`
 		RawSQL     string `json:"rawSql"`
 	} `json:"targets,omitempty"`

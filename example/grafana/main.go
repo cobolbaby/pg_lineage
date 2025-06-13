@@ -439,25 +439,15 @@ func getPanelDependencies(sp *ServiceProvider, panel *service.Panel, dashboard *
 				continue
 			}
 
-			var tables []*service.Table
-			var dependency *service.SqlTableDependency
-			if t.RawSQL != "" {
-				tables, _ = parseRawSQL(t.RawSQL, pgBundle)
-				dependency = &service.SqlTableDependency{
-					RawSql: t.RawSQL,
-					Tables: tables,
-				}
-			} else if t.Query != "" {
-				log.Warnf("Panel %s has Query but no RawSQL, using Query for parsing", panel.Title)
-
-				tables, _ = parseRawSQL(t.Query, pgBundle)
-				dependency = &service.SqlTableDependency{
-					RawSql: t.Query,
-					Tables: tables,
-				}
-			} else {
-				log.Warnf("Panel %s has no RawSQL or Query, skipping", panel.Title)
+			if t.RawSQL == "" {
+				log.Warnf("Panel %s has no RawSQL, skipping", panel.Title)
 				continue
+			}
+
+			tables, _ := parseRawSQL(t.RawSQL, pgBundle)
+			dependency := &service.SqlTableDependency{
+				RawSql: t.RawSQL,
+				Tables: tables,
 			}
 
 			result[pgBundle.Config] = append(result[pgBundle.Config], dependency)
