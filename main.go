@@ -5,6 +5,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 
 	_ "github.com/lib/pq"
@@ -112,17 +114,53 @@ func processDataSource(conf C.PostgresService, wm *writer.WriterManager) {
 }
 
 func fetchQueryStats(db *sql.DB, dbName string) (*sql.Rows, error) {
-	query := fmt.Sprintf(`
-		SELECT 
-			s.query, s.calls, s.total_time, s.min_time, s.max_time, s.mean_time
-		FROM 
-			pg_stat_statements s
-		JOIN
-			pg_database d ON d.oid = s.dbid
-		WHERE
-			d.datname = '%s' AND calls > 10
-		ORDER BY s.mean_time DESC
-		LIMIT 1000;`, dbName)
+	// 获取 PostgreSQL 版本
+	var versionStr string
+	err := db.QueryRow("SHOW server_version;").Scan(&versionStr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get postgres version: %w", err)
+	}
+
+	// 提取主版本号
+	re := regexp.MustCompile(`^(\d+)\.?(\d+)?`)
+	matches := re.FindStringSubmatch(versionStr)
+	if len(matches) < 2 {
+		return nil, fmt.Errorf("could not parse version string: %s", versionStr)
+	}
+	major, _ := strconv.Atoi(matches[1])
+	// minor := 0
+	// if len(matches) > 2 && matches[2] != "" {
+	// 	minor, _ = strconv.Atoi(matches[2])
+	// }
+
+	// 针对不同版本选择字段
+	var query string
+	if major >= 13 {
+		// PostgreSQL 13+ 使用 *_exec_time
+		query = fmt.Sprintf(`
+			SELECT 
+				s.query, s.calls, s.total_exec_time AS total_time,
+				s.min_exec_time AS min_time,
+				s.max_exec_time AS max_time,
+				s.mean_exec_time AS mean_time
+			FROM pg_stat_statements s
+			JOIN pg_database d ON d.oid = s.dbid
+			WHERE d.datname = '%s' AND calls > 10
+			ORDER BY s.mean_exec_time DESC
+			LIMIT 1000;`, dbName)
+	} else {
+		// PostgreSQL < 13 使用 *_time
+		query = fmt.Sprintf(`
+			SELECT 
+				s.query, s.calls, s.total_time, 
+				s.min_time, s.max_time, s.mean_time
+			FROM pg_stat_statements s
+			JOIN pg_database d ON d.oid = s.dbid
+			WHERE d.datname = '%s' AND calls > 10
+			ORDER BY s.mean_time DESC
+			LIMIT 1000;`, dbName)
+	}
+
 	return db.Query(query)
 }
 
