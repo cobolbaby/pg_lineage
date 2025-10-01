@@ -182,11 +182,7 @@ func parseSQL(sqlTree *depgraph.Graph, sql string) error {
 			tnode := parseRangeVar(is.GetRelation())
 			sqlTree.AddNode(tnode)
 
-			// // with ... select * from ...
-			// if is.GetWithClause() != nil {
-			// 	parseWithClause(is.GetWithClause(), sqlTree)
-			// }
-
+			// with ... select * from ...
 			// select * from ...
 			if is.GetSelectStmt() != nil {
 
@@ -243,9 +239,16 @@ func parseSQL(sqlTree *depgraph.Graph, sql string) error {
 			}
 		}
 
+		// with ... select * from ...
 		// select ... from ...
 		if s.Stmt.GetSelectStmt() != nil {
 			ss := s.Stmt.GetSelectStmt()
+
+			// with ... select * from ...
+			if ss.GetWithClause() != nil {
+				parseWithClause(ss.GetWithClause(), sqlTree)
+			}
+
 			for _, r := range parseSelectStmt(ss) {
 				sqlTree.AddNode(r)
 			}
